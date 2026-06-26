@@ -1,0 +1,16 @@
+[Unit]
+Description=Raspberry Pi WiFi LED control server
+After=network.target
+
+[Service]
+# Adjust User and paths to match where you cloned the repo.
+User=pi
+WorkingDirectory=/home/pi/rpi-wifi-led
+ExecStart=/home/pi/rpi-wifi-led/venv/bin/python /home/pi/rpi-wifi-led/app.py
+Restart=on-failure
+RestartSec=3
+Environment=LED_PIN=18
+Environment=PORT=5000
+
+[Install]
+WantedBy=multi-user.target

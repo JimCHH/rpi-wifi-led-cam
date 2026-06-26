@@ -1,0 +1,5 @@
+flask>=3.0
+gpiozero>=2.0
+# Backend that gpiozero uses to talk to the GPIO pins.
+# lgpio works on current Raspberry Pi OS (Bookworm) including the Pi Zero 2 W.
+lgpio>=0.2
