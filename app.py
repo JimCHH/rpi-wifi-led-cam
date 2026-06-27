@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-rpi-wifi-led — control an LED on a Raspberry Pi GPIO over WiFi.
+rpi-wifi-led — control one or more LEDs on a Raspberry Pi GPIO over WiFi.
 
-Runs a tiny web server on the Pi. Open the Pi's IP address in any browser
-on your Mac/PC (on the same network) to toggle the LED and set brightness.
-No internet connection is required — only a shared local network.
+Runs a tiny web server on the Pi. Open the Pi's IP address in any browser on
+your Mac/PC (on the same network) to toggle each LED, set brightness, and run
+effects. No internet connection is required — only a shared local network.
 
-Wiring (default): LED on GPIO18 (BCM) = physical pin 12.
-    GPIO18 ──[ 330Ω resistor ]──►|── GND
-                              LED (long leg = +, toward the resistor/GPIO)
+Lights are configured with the LED_PINS env var (comma-separated BCM pins);
+default "18,23" drives two independent LEDs. Optional LED_NAMES gives them
+friendly labels, e.g. LED_NAMES="Desk,Shelf".
 
-GPIO18 supports hardware PWM, which gives smooth, flicker-free brightness.
+Wiring (per LED): long leg (+) → 330Ω resistor → its GPIO pin; short leg (–) → GND.
+    Light 1 default: GPIO18 (physical pin 12), GND pin 14.
+    Light 2 default: GPIO23 (physical pin 16), GND pin 20 (or any GND).
+GPIO18 supports hardware PWM; the others use lgpio's PWM, which is fine for LEDs.
 """
 import os
 from flask import Flask, jsonify, request, Response
@@ -19,35 +22,59 @@ from flask import Flask, jsonify, request, Response
 # PWMLED lets us control brightness (0.0–1.0), not just on/off.
 from gpiozero import PWMLED
 
-# BCM pin number. GPIO18 = physical pin 12. Change here if you wire elsewhere.
-LED_PIN = int(os.environ.get("LED_PIN", "18"))
-
-led = PWMLED(LED_PIN)
-
-app = Flask(__name__)
-
 # Effects map to gpiozero's built-in background animations. "none" = solid.
 EFFECTS = ("none", "blink", "breathe", "strobe")
 
-# In-memory state so the UI can reflect the current value after a refresh.
-state = {"on": False, "brightness": 1.0, "effect": "none"}
+# Configure lights from the environment. BCM pin numbers, comma-separated.
+PINS = [int(p) for p in os.environ.get("LED_PINS", "18,23").split(",") if p.strip()]
+_names = [n.strip() for n in os.environ.get("LED_NAMES", "").split(",")]
+
+# Build the light registry: id -> {led, name, pin, state}. `order` keeps the
+# UI/JSON ordering stable (dicts preserve insertion order, but be explicit).
+lights = {}
+order = []
+for i, pin in enumerate(PINS):
+    lid = "light%d" % (i + 1)
+    name = _names[i] if i < len(_names) and _names[i] else "Light %d" % (i + 1)
+    lights[lid] = {
+        "led": PWMLED(pin),
+        "name": name,
+        "pin": pin,
+        # In-memory state so the UI can reflect values after a refresh.
+        "state": {"on": False, "brightness": 1.0, "effect": "none"},
+    }
+    order.append(lid)
+
+app = Flask(__name__)
 
 
-def apply_state():
-    """Push the current state object to the physical LED.
+def apply_state(light):
+    """Push one light's state to its physical LED.
 
-    For solid output we set led.value directly — its setter cancels any
-    running blink/pulse thread. For effects we hand off to gpiozero's
-    background animations (each call also stops the previous one).
+    For solid output we set led.value directly — its setter cancels any running
+    blink/pulse thread. For effects we hand off to gpiozero's background
+    animations (each call also stops the previous one).
     """
-    if not state["on"] or state["effect"] == "none":
-        led.value = state["brightness"] if state["on"] else 0.0
-    elif state["effect"] == "blink":
+    led = light["led"]
+    s = light["state"]
+    if not s["on"] or s["effect"] == "none":
+        led.value = s["brightness"] if s["on"] else 0.0
+    elif s["effect"] == "blink":
         led.blink(on_time=0.5, off_time=0.5, background=True)
-    elif state["effect"] == "strobe":
+    elif s["effect"] == "strobe":
         led.blink(on_time=0.05, off_time=0.05, background=True)
-    elif state["effect"] == "breathe":
+    elif s["effect"] == "breathe":
         led.pulse(fade_in_time=1.0, fade_out_time=1.0, background=True)
+
+
+def payload(lid):
+    """JSON-serializable view of one light."""
+    light = lights[lid]
+    return {"id": lid, "name": light["name"], "pin": light["pin"], **light["state"]}
+
+
+def all_payloads():
+    return [payload(lid) for lid in order]
 
 
 PAGE = """<!doctype html>
@@ -58,17 +85,22 @@ PAGE = """<!doctype html>
 <title>Pi WiFi LED</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 420px;
-         margin: 40px auto; padding: 0 20px; text-align: center; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px;
+         margin: 32px auto; padding: 0 16px; text-align: center; }
   h1 { font-size: 1.4rem; }
-  .bulb { font-size: 5rem; transition: opacity .15s, filter .15s; }
-  button { font-size: 1.1rem; padding: 12px 28px; border: 0; border-radius: 12px;
+  .lights { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+  .card { border: 1px solid #8884; border-radius: 16px; padding: 16px 20px;
+          width: 300px; box-sizing: border-box; }
+  .card h2 { font-size: 1.1rem; margin: 0 0 8px; }
+  .card h2 small { opacity: .55; font-weight: normal; }
+  .bulb { font-size: 4rem; transition: opacity .15s, filter .15s; }
+  button { font-size: 1.05rem; padding: 10px 22px; border: 0; border-radius: 12px;
            cursor: pointer; background: #2d7ff9; color: #fff; }
   button.off { background: #555; }
-  input[type=range] { width: 100%; margin: 24px 0 8px; }
-  .row { margin: 24px 0; }
-  .effects { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
-  .effects button { font-size: .95rem; padding: 8px 16px; background: #e6e6e6;
+  input[type=range] { width: 100%; margin: 18px 0 4px; }
+  .row { margin: 16px 0; }
+  .effects { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+  .effects button { font-size: .85rem; padding: 7px 12px; background: #e6e6e6;
                     color: #222; }
   .effects button.active { background: #2d7ff9; color: #fff; }
   small { opacity: .6; }
@@ -76,59 +108,75 @@ PAGE = """<!doctype html>
 </head>
 <body>
   <h1>Raspberry Pi WiFi LED</h1>
-  <div class="bulb" id="bulb">&#128161;</div>
-  <div class="row">
-    <button id="toggle">Loading…</button>
-  </div>
-  <div class="row">
-    <label for="bright">Brightness</label>
-    <input type="range" id="bright" min="0" max="100" value="100">
-    <div><span id="pct">100</span>%</div>
-  </div>
-  <div class="row effects">
-    <button data-fx="none">Solid</button>
-    <button data-fx="blink">Blink</button>
-    <button data-fx="breathe">Breathe</button>
-    <button data-fx="strobe">Strobe</button>
-  </div>
-  <small>GPIO pin (BCM): __LED_PIN__</small>
+  <div class="lights" id="lights"></div>
 <script>
-const bulb = document.getElementById('bulb');
-const toggle = document.getElementById('toggle');
-const bright = document.getElementById('bright');
-const pct = document.getElementById('pct');
-const fxButtons = document.querySelectorAll('.effects button');
+const container = document.getElementById('lights');
+const EFFECTS = ['none', 'blink', 'breathe', 'strobe'];
+const LABELS = {none: 'Solid', blink: 'Blink', breathe: 'Breathe', strobe: 'Strobe'};
 
-function render(s) {
-  toggle.textContent = s.on ? 'Turn OFF' : 'Turn ON';
-  toggle.className = s.on ? '' : 'off';
-  bright.value = Math.round(s.brightness * 100);
-  pct.textContent = bright.value;
-  bulb.style.opacity = s.on ? (0.25 + 0.75 * s.brightness) : 0.15;
-  bulb.style.filter = s.on ? 'none' : 'grayscale(1)';
-  // Brightness only applies to solid mode; dim the slider during effects.
-  const solid = (s.effect || 'none') === 'none';
-  bright.disabled = !solid;
-  fxButtons.forEach(b => b.classList.toggle(
-    'active', s.on && b.dataset.fx === (s.effect || 'none')));
+function cardHtml(l) {
+  return `
+  <div class="card" data-id="${l.id}">
+    <h2>${l.name} <small>GPIO ${l.pin}</small></h2>
+    <div class="bulb">&#128161;</div>
+    <div class="row"><button class="toggle">…</button></div>
+    <div class="row">
+      <label>Brightness</label>
+      <input type="range" class="bright" min="0" max="100" value="100">
+      <div><span class="pct">100</span>%</div>
+    </div>
+    <div class="row effects">
+      ${EFFECTS.map(fx => `<button data-fx="${fx}">${LABELS[fx]}</button>`).join('')}
+    </div>
+  </div>`;
 }
 
-async function send(path, body) {
-  const r = await fetch(path, {
+const card = id => container.querySelector(`.card[data-id="${id}"]`);
+
+function bind(id) {
+  const c = card(id);
+  c.querySelector('.toggle').onclick = () => act(id, 'toggle');
+  const br = c.querySelector('.bright');
+  br.oninput = () => { c.querySelector('.pct').textContent = br.value; };
+  br.onchange = () => act(id, 'brightness', {value: br.value / 100});
+  c.querySelectorAll('.effects button').forEach(b =>
+    b.onclick = () => act(id, 'effect', {name: b.dataset.fx}));
+}
+
+async function act(id, path, body) {
+  const r = await fetch(`/light/${id}/${path}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: body ? JSON.stringify(body) : undefined
   });
-  render(await r.json());
+  update(await r.json());
 }
 
-toggle.onclick = () => send('/toggle');
-bright.oninput = () => { pct.textContent = bright.value; };
-bright.onchange = () => send('/brightness', {value: bright.value / 100});
-fxButtons.forEach(b => b.onclick = () => send('/effect', {name: b.dataset.fx}));
+function update(l) {
+  const c = card(l.id);
+  if (!c) return;
+  const t = c.querySelector('.toggle');
+  t.textContent = l.on ? 'Turn OFF' : 'Turn ON';
+  t.className = 'toggle' + (l.on ? '' : ' off');
+  const br = c.querySelector('.bright');
+  br.value = Math.round(l.brightness * 100);
+  c.querySelector('.pct').textContent = br.value;
+  const solid = (l.effect || 'none') === 'none';
+  br.disabled = !solid;
+  const bulb = c.querySelector('.bulb');
+  bulb.style.opacity = l.on ? (0.25 + 0.75 * l.brightness) : 0.15;
+  bulb.style.filter = l.on ? 'none' : 'grayscale(1)';
+  c.querySelectorAll('.effects button').forEach(b =>
+    b.classList.toggle('active', l.on && b.dataset.fx === (l.effect || 'none')));
+}
 
-// Load initial state.
-fetch('/state').then(r => r.json()).then(render);
+async function load() {
+  const states = await (await fetch('/state')).json();
+  container.innerHTML = states.map(cardHtml).join('');
+  states.forEach(l => bind(l.id));
+  states.forEach(update);
+}
+load();
 </script>
 </body>
 </html>
@@ -137,69 +185,89 @@ fetch('/state').then(r => r.json()).then(render);
 
 @app.route("/")
 def index():
-    return Response(PAGE.replace("__LED_PIN__", str(LED_PIN)), mimetype="text/html")
+    return Response(PAGE, mimetype="text/html")
 
 
 @app.route("/state")
 def get_state():
-    return jsonify(state)
+    return jsonify(all_payloads())
 
 
-@app.route("/toggle", methods=["POST"])
-def toggle():
-    state["on"] = not state["on"]
-    state["effect"] = "none"
-    apply_state()
-    return jsonify(state)
+def _get(lid):
+    """Return the light or None (so routes can 404 cleanly)."""
+    return lights.get(lid)
 
 
-@app.route("/on", methods=["POST"])
-def on():
-    state["on"] = True
-    state["effect"] = "none"
-    apply_state()
-    return jsonify(state)
+@app.route("/light/<lid>/toggle", methods=["POST"])
+def toggle(lid):
+    light = _get(lid)
+    if not light:
+        return jsonify({"error": "unknown light"}), 404
+    light["state"]["on"] = not light["state"]["on"]
+    light["state"]["effect"] = "none"
+    apply_state(light)
+    return jsonify(payload(lid))
 
 
-@app.route("/off", methods=["POST"])
-def off():
-    state["on"] = False
-    state["effect"] = "none"
-    apply_state()
-    return jsonify(state)
+@app.route("/light/<lid>/on", methods=["POST"])
+def on(lid):
+    light = _get(lid)
+    if not light:
+        return jsonify({"error": "unknown light"}), 404
+    light["state"]["on"] = True
+    light["state"]["effect"] = "none"
+    apply_state(light)
+    return jsonify(payload(lid))
 
 
-@app.route("/brightness", methods=["POST"])
-def brightness():
+@app.route("/light/<lid>/off", methods=["POST"])
+def off(lid):
+    light = _get(lid)
+    if not light:
+        return jsonify({"error": "unknown light"}), 404
+    light["state"]["on"] = False
+    light["state"]["effect"] = "none"
+    apply_state(light)
+    return jsonify(payload(lid))
+
+
+@app.route("/light/<lid>/brightness", methods=["POST"])
+def brightness(lid):
+    light = _get(lid)
+    if not light:
+        return jsonify({"error": "unknown light"}), 404
     data = request.get_json(silent=True) or {}
     try:
         value = float(data.get("value"))
     except (TypeError, ValueError):
         return jsonify({"error": "value must be a number 0.0–1.0"}), 400
-    state["brightness"] = max(0.0, min(1.0, value))
-    # Adjusting brightness implies solid output and the light on.
-    state["effect"] = "none"
-    if state["brightness"] > 0:
-        state["on"] = True
-    apply_state()
-    return jsonify(state)
+    s = light["state"]
+    s["brightness"] = max(0.0, min(1.0, value))
+    s["effect"] = "none"  # adjusting brightness implies solid output
+    if s["brightness"] > 0:
+        s["on"] = True
+    apply_state(light)
+    return jsonify(payload(lid))
 
 
-@app.route("/effect", methods=["POST"])
-def effect():
+@app.route("/light/<lid>/effect", methods=["POST"])
+def effect(lid):
+    light = _get(lid)
+    if not light:
+        return jsonify({"error": "unknown light"}), 404
     data = request.get_json(silent=True) or {}
     name = data.get("name")
     if name not in EFFECTS:
         return jsonify({"error": "name must be one of %s" % (EFFECTS,)}), 400
-    state["effect"] = name
-    # Selecting any effect (including 'none'/solid) turns the LED on.
-    state["on"] = True
-    apply_state()
-    return jsonify(state)
+    light["state"]["effect"] = name
+    light["state"]["on"] = True  # selecting an effect turns the light on
+    apply_state(light)
+    return jsonify(payload(lid))
 
 
 if __name__ == "__main__":
     # host=0.0.0.0 makes the server reachable from other devices on the
     # network (your Mac/PC), not just localhost on the Pi itself.
-    apply_state()
+    for lid in order:
+        apply_state(lights[lid])
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
