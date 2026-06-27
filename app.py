@@ -23,8 +23,9 @@ from flask import Flask, jsonify, request, Response
 # PWMLED lets us control brightness (0.0–1.0), not just on/off.
 from gpiozero import PWMLED
 
-# Safety floor for the max-intensity cap: 1e-4 == 0.01% of full brightness.
-CAP_MIN = 1e-4
+# Safety floor for the max-intensity cap: 0.01 == 1% of full brightness
+# (below this, software PWM can't reliably light the LED anyway).
+CAP_MIN = 0.01
 
 # Effects map to gpiozero's built-in background animations. "none" = solid.
 EFFECTS = ("none", "blink", "breathe", "strobe")
@@ -33,11 +34,8 @@ EFFECTS = ("none", "blink", "breathe", "strobe")
 PINS = [int(p) for p in os.environ.get("LED_PINS", "18,23").split(",") if p.strip()]
 _names = [n.strip() for n in os.environ.get("LED_NAMES", "").split(",")]
 
-# PWM frequency (Hz). Trade-off: higher = smoother but raises the minimum
-# renderable brightness (software PWM can't make ultra-short pulses); lower =
-# reaches dimmer levels but risks flicker. 500 Hz balances smoothness with a low
-# enough dim floor for close-to-eye use. Override with PWM_HZ.
-PWM_HZ = int(os.environ.get("PWM_HZ", "500"))
+# PWM frequency (Hz). 1000 Hz is smooth and flicker-free. Override with PWM_HZ.
+PWM_HZ = int(os.environ.get("PWM_HZ", "1000"))
 
 # Build the light registry: id -> {led, name, pin, state}. `order` keeps the
 # UI/JSON ordering stable (dicts preserve insertion order, but be explicit).
@@ -188,7 +186,7 @@ PAGE = """<!doctype html>
     </div>
     <div class="row">
       <label>Max intensity (all)</label>
-      <input type="range" id="all-cap" min="0" max="1000" value="1000">
+      <input type="range" id="all-cap" min="1" max="100" value="100">
       <div><span id="all-cappct">100</span>%</div>
     </div>
     <div class="row effects" id="all-effects">
@@ -204,16 +202,6 @@ const container = document.getElementById('lights');
 const EFFECTS = ['none', 'blink', 'breathe', 'strobe'];
 const LABELS = {none: 'Solid', blink: 'Blink', breathe: 'Breathe', strobe: 'Strobe'};
 
-// Max-intensity cap is a log slider: position 0..1000 maps to 10^-4 (0.01%)..10^0 (100%).
-const CAP_LO = -4, CAP_HI = 0;
-const sliderToCap = pos => Math.pow(10, CAP_LO + (pos / 1000) * (CAP_HI - CAP_LO));
-const capToSlider = cap =>
-  Math.round((Math.log10(cap) - CAP_LO) / (CAP_HI - CAP_LO) * 1000);
-function fmtCap(cap) {
-  const pct = cap * 100;
-  return pct >= 1 ? pct.toFixed(0) : pct.toPrecision(2);  // e.g. "100", "1", "0.010"
-}
-
 function cardHtml(l) {
   return `
   <div class="card" data-id="${l.id}">
@@ -227,7 +215,7 @@ function cardHtml(l) {
     </div>
     <div class="row">
       <label>Max intensity (safety cap)</label>
-      <input type="range" class="cap" min="0" max="1000" value="1000">
+      <input type="range" class="cap" min="1" max="100" value="100">
       <div><span class="cappct">100</span>%</div>
     </div>
     <div class="row effects">
@@ -245,8 +233,8 @@ function bind(id) {
   br.oninput = () => { c.querySelector('.pct').textContent = br.value; };
   br.onchange = () => act(id, 'brightness', {value: br.value / 100});
   const cap = c.querySelector('.cap');
-  cap.oninput = () => { c.querySelector('.cappct').textContent = fmtCap(sliderToCap(cap.value)); };
-  cap.onchange = () => act(id, 'cap', {value: sliderToCap(cap.value)});
+  cap.oninput = () => { c.querySelector('.cappct').textContent = cap.value; };
+  cap.onchange = () => act(id, 'cap', {value: cap.value / 100});
   c.querySelectorAll('.effects button').forEach(b =>
     b.onclick = () => act(id, 'effect', {name: b.dataset.fx}));
 }
@@ -270,8 +258,8 @@ function update(l) {
   br.value = Math.round(l.brightness * 100);
   c.querySelector('.pct').textContent = br.value;
   const cap = c.querySelector('.cap');
-  cap.value = capToSlider(l.cap);
-  c.querySelector('.cappct').textContent = fmtCap(l.cap);
+  cap.value = Math.round(l.cap * 100);
+  c.querySelector('.cappct').textContent = cap.value;
   const solid = (l.effect || 'none') === 'none';
   br.disabled = !solid;
   const bulb = c.querySelector('.bulb');
@@ -297,8 +285,8 @@ const allBright = document.getElementById('all-bright');
 allBright.oninput = () => { document.getElementById('all-pct').textContent = allBright.value; };
 allBright.onchange = () => actAll('brightness', {value: allBright.value / 100});
 const allCap = document.getElementById('all-cap');
-allCap.oninput = () => { document.getElementById('all-cappct').textContent = fmtCap(sliderToCap(allCap.value)); };
-allCap.onchange = () => actAll('cap', {value: sliderToCap(allCap.value)});
+allCap.oninput = () => { document.getElementById('all-cappct').textContent = allCap.value; };
+allCap.onchange = () => actAll('cap', {value: allCap.value / 100});
 document.querySelectorAll('#all-effects button').forEach(b =>
   b.onclick = () => actAll('effect', {name: b.dataset.allfx}));
 

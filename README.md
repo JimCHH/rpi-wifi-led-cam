@@ -48,11 +48,11 @@ Pin reference (the corner with pin 1 is nearest the SD-card / micro-USB edge):
 ```
 
 GPIO18 supports **hardware PWM** (smoothest brightness); the other pins use
-lgpio's PWM, which is perfectly fine for LEDs. PWM runs at **500 Hz** by default
-— a balance between smoothness and reaching dim levels. Tune it with `PWM_HZ`:
-*lower* (e.g. `200`) reaches dimmer brightness but may flicker; *higher* is
-smoother but can't render very low brightness (software PWM has a minimum pulse
-width, so the dim floor rises with frequency). **Add more lights** by setting
+lgpio's PWM, which is perfectly fine for LEDs. PWM runs at **1000 Hz** by default
+for flicker-free dimming — tune it with `PWM_HZ`. (Note: software PWM has a
+minimum pulse width, so it can't render brightness much below ~1%; lower `PWM_HZ`
+to reach dimmer, or use a larger series resistor to cap brightness in hardware.)
+**Add more lights** by setting
 `LED_PINS` (e.g. `LED_PINS=18,23,24`) and optional `LED_NAMES="Desk,Shelf,Lamp"`
 — each gets its own card in the web UI. See `install-service.sh` to bake the
 pin list into the autostart service.
@@ -346,23 +346,23 @@ light's state, e.g. `{"id": "light1", "name": "Light 1", "pin": 18,
 | POST   | `/light/<id>/off`             | —                          | Turn off          |
 | POST   | `/light/<id>/brightness`      | `{"value": 0.5}` (0.0–1.0) | Set brightness    |
 | POST   | `/light/<id>/effect`          | `{"name": "blink"}`        | Run an effect     |
-| POST   | `/light/<id>/cap`             | `{"value": 0.01}` (1e-4–1) | Set max-intensity cap |
+| POST   | `/light/<id>/cap`             | `{"value": 0.5}` (0.01–1)  | Set max-intensity cap |
 | POST   | `/all/on`                     | —                          | All lights on     |
 | POST   | `/all/off`                    | —                          | All lights off    |
 | POST   | `/all/brightness`             | `{"value": 0.5}` (0.0–1.0) | All brightness    |
 | POST   | `/all/effect`                 | `{"name": "blink"}`        | Effect on all     |
-| POST   | `/all/cap`                    | `{"value": 0.01}` (1e-4–1) | Cap on all        |
+| POST   | `/all/cap`                    | `{"value": 0.5}` (0.01–1)  | Cap on all        |
 
 `effect` names: `none` (solid), `blink`, `breathe` (fade in/out), `strobe`.
 Selecting an effect turns the light on; on/off/brightness return it to solid mode.
 The `/all/*` routes apply to every light at once (the **All lights** bar in the
 UI) and return the full array.
 
-**Max-intensity cap (eye-safety).** Each light has a `cap` (0.0001–1.0) that
+**Max-intensity cap (eye-safety).** Each light has a `cap` (0.01–1.0) that
 ceilings its output: solid output = `brightness × cap`, and **effects also peak
-at `cap`**. The UI exposes it as a **log-scale slider from 0.01% to 100%**, so
-you can dial the maximum way down (e.g. ~1%) when the LED is close to the eyes.
-Default is `1.0` (100%, no limit).
+at `cap`**. The UI exposes it as a **slider from 1% to 100%**, so you can dial the
+maximum down (e.g. ~1%) when the LED is close to the eyes. Default is `1.0`
+(100%, no limit).
 
 Example from your Mac/PC:
 
