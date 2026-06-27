@@ -280,6 +280,49 @@ gives years of service.
 
 ---
 
+## 8. Take it anywhere: roaming + hotspot fallback
+
+Moving the Pi to a new place with different WiFi does **not** require re-flashing
+— you just teach it the new network, and it remembers all of them. Two helpers
+make this painless.
+
+### Add networks it should auto-join
+
+Run this for each place (home, office, **your phone's hotspot**, …) while the Pi
+is reachable. It then auto-joins whichever is in range:
+
+```bash
+./add-wifi.sh "NEW_SSID" "NEW_PASSWORD"
+```
+
+> Tip: add your **phone hotspot** as one of them. Anywhere you go, enable the
+> hotspot, connect your Mac to it too, and `ssh pi@raspberrypi.local` — your
+> phone becomes the shared network, so you're never locked out.
+
+### Fall back to the Pi's own hotspot when no known WiFi exists
+
+```bash
+./setup-autohotspot.sh                                   # default SSID PiLED / pass raspberry
+HOTSPOT_SSID=MyPi HOTSPOT_PASS=supersecret ./setup-autohotspot.sh   # custom
+```
+
+After this, at every boot/check:
+
+- **A known WiFi is in range** → it joins normally.
+- **No known WiFi** → it starts its **own hotspot**. Connect your Mac to that
+  SSID, then reach it at **`ssh pi@10.42.0.1`** / **`http://10.42.0.1:5000`** —
+  no router, no internet, works literally anywhere.
+
+To switch back from hotspot mode to a known WiFi, reboot near that network (or
+`sudo systemctl restart pi-autohotspot`) — the script avoids scanning while the
+hotspot is live so it doesn't drop connected clients.
+
+> Note on access while you're *away* from the Pi (different building): SSH/HTTP
+> only need a **shared local network**, not the internet. To reach it remotely
+> over the internet you'd add a VPN/tunnel such as Tailscale — out of scope here.
+
+---
+
 ## API (if you want to script it)
 
 Each light is addressed by id (`light1`, `light2`, …). Routes return that
