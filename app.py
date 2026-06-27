@@ -16,11 +16,15 @@ Wiring (per LED): long leg (+) → 330Ω resistor → its GPIO pin; short leg (�
 GPIO18 supports hardware PWM; the others use lgpio's PWM, which is fine for LEDs.
 """
 import os
+import threading
 from flask import Flask, jsonify, request, Response
 
 # gpiozero is the modern, recommended GPIO library on Raspberry Pi OS.
 # PWMLED lets us control brightness (0.0–1.0), not just on/off.
 from gpiozero import PWMLED
+
+# Safety floor for the max-intensity cap: 1e-4 == 0.01% of full brightness.
+CAP_MIN = 1e-4
 
 # Effects map to gpiozero's built-in background animations. "none" = solid.
 EFFECTS = ("none", "blink", "breathe", "strobe")
@@ -45,30 +49,84 @@ for i, pin in enumerate(PINS):
         "name": name,
         "pin": pin,
         # In-memory state so the UI can reflect values after a refresh.
-        "state": {"on": False, "brightness": 1.0, "effect": "none"},
+        # cap = max-intensity ceiling (0.0001–1.0); brightness scales within it.
+        "state": {"on": False, "brightness": 1.0, "effect": "none", "cap": 1.0},
+        "lock": threading.Lock(),     # serialize apply_state per light
+        "stop": threading.Event(),    # signal the running effect thread to stop
+        "thread": None,               # the running effect thread, if any
     }
     order.append(lid)
 
 app = Flask(__name__)
 
 
-def apply_state(light):
-    """Push one light's state to its physical LED.
+def _stop_effect(light):
+    """Stop a running effect thread and arm a fresh stop signal."""
+    t = light["thread"]
+    if t and t.is_alive():
+        light["stop"].set()
+        t.join(timeout=1.5)
+    light["stop"] = threading.Event()
+    light["thread"] = None
 
-    For solid output we set led.value directly — its setter cancels any running
-    blink/pulse thread. For effects we hand off to gpiozero's background
-    animations (each call also stops the previous one).
+
+def _effect_loop(light, stop):
+    """Drive an effect in the background, peaking at the light's cap.
+
+    Reads cap live each cycle so a cap change takes effect without a restart.
     """
     led = light["led"]
     s = light["state"]
-    if not s["on"] or s["effect"] == "none":
-        led.value = s["brightness"] if s["on"] else 0.0
-    elif s["effect"] == "blink":
-        led.blink(on_time=0.5, off_time=0.5, background=True)
-    elif s["effect"] == "strobe":
-        led.blink(on_time=0.05, off_time=0.05, background=True)
-    elif s["effect"] == "breathe":
-        led.pulse(fade_in_time=1.0, fade_out_time=1.0, background=True)
+    while not stop.is_set():
+        cap = s["cap"]
+        eff = s["effect"]
+        if eff == "blink":
+            led.value = cap
+            if stop.wait(0.5):
+                break
+            led.value = 0.0
+            if stop.wait(0.5):
+                break
+        elif eff == "strobe":
+            led.value = cap
+            if stop.wait(0.05):
+                break
+            led.value = 0.0
+            if stop.wait(0.05):
+                break
+        elif eff == "breathe":
+            n = 40
+            broke = False
+            for i in list(range(n + 1)) + list(range(n, -1, -1)):
+                led.value = cap * i / n
+                if stop.wait(0.025):
+                    broke = True
+                    break
+            if broke:
+                break
+        else:
+            break
+
+
+def apply_state(light):
+    """Push one light's state to its physical LED.
+
+    Output is gated by `cap` (the safety ceiling): solid output = brightness×cap,
+    and effects peak at cap. Stops any running effect thread first.
+    """
+    with light["lock"]:
+        _stop_effect(light)
+        s = light["state"]
+        led = light["led"]
+        if not s["on"]:
+            led.value = 0.0
+        elif s["effect"] == "none":
+            led.value = s["brightness"] * s["cap"]
+        else:
+            t = threading.Thread(
+                target=_effect_loop, args=(light, light["stop"]), daemon=True)
+            light["thread"] = t
+            t.start()
 
 
 def payload(lid):
@@ -126,6 +184,11 @@ PAGE = """<!doctype html>
       <input type="range" id="all-bright" min="0" max="100" value="100">
       <div><span id="all-pct">100</span>%</div>
     </div>
+    <div class="row">
+      <label>Max intensity (all)</label>
+      <input type="range" id="all-cap" min="0" max="1000" value="1000">
+      <div><span id="all-cappct">100</span>%</div>
+    </div>
     <div class="row effects" id="all-effects">
       <button data-allfx="none">Solid</button>
       <button data-allfx="blink">Blink</button>
@@ -139,6 +202,16 @@ const container = document.getElementById('lights');
 const EFFECTS = ['none', 'blink', 'breathe', 'strobe'];
 const LABELS = {none: 'Solid', blink: 'Blink', breathe: 'Breathe', strobe: 'Strobe'};
 
+// Max-intensity cap is a log slider: position 0..1000 maps to 10^-4 (0.01%)..10^0 (100%).
+const CAP_LO = -4, CAP_HI = 0;
+const sliderToCap = pos => Math.pow(10, CAP_LO + (pos / 1000) * (CAP_HI - CAP_LO));
+const capToSlider = cap =>
+  Math.round((Math.log10(cap) - CAP_LO) / (CAP_HI - CAP_LO) * 1000);
+function fmtCap(cap) {
+  const pct = cap * 100;
+  return pct >= 1 ? pct.toFixed(0) : pct.toPrecision(2);  // e.g. "100", "1", "0.010"
+}
+
 function cardHtml(l) {
   return `
   <div class="card" data-id="${l.id}">
@@ -149,6 +222,11 @@ function cardHtml(l) {
       <label>Brightness</label>
       <input type="range" class="bright" min="0" max="100" value="100">
       <div><span class="pct">100</span>%</div>
+    </div>
+    <div class="row">
+      <label>Max intensity (safety cap)</label>
+      <input type="range" class="cap" min="0" max="1000" value="1000">
+      <div><span class="cappct">100</span>%</div>
     </div>
     <div class="row effects">
       ${EFFECTS.map(fx => `<button data-fx="${fx}">${LABELS[fx]}</button>`).join('')}
@@ -164,6 +242,9 @@ function bind(id) {
   const br = c.querySelector('.bright');
   br.oninput = () => { c.querySelector('.pct').textContent = br.value; };
   br.onchange = () => act(id, 'brightness', {value: br.value / 100});
+  const cap = c.querySelector('.cap');
+  cap.oninput = () => { c.querySelector('.cappct').textContent = fmtCap(sliderToCap(cap.value)); };
+  cap.onchange = () => act(id, 'cap', {value: sliderToCap(cap.value)});
   c.querySelectorAll('.effects button').forEach(b =>
     b.onclick = () => act(id, 'effect', {name: b.dataset.fx}));
 }
@@ -186,6 +267,9 @@ function update(l) {
   const br = c.querySelector('.bright');
   br.value = Math.round(l.brightness * 100);
   c.querySelector('.pct').textContent = br.value;
+  const cap = c.querySelector('.cap');
+  cap.value = capToSlider(l.cap);
+  c.querySelector('.cappct').textContent = fmtCap(l.cap);
   const solid = (l.effect || 'none') === 'none';
   br.disabled = !solid;
   const bulb = c.querySelector('.bulb');
@@ -210,6 +294,9 @@ document.getElementById('all-off').onclick = () => actAll('off');
 const allBright = document.getElementById('all-bright');
 allBright.oninput = () => { document.getElementById('all-pct').textContent = allBright.value; };
 allBright.onchange = () => actAll('brightness', {value: allBright.value / 100});
+const allCap = document.getElementById('all-cap');
+allCap.oninput = () => { document.getElementById('all-cappct').textContent = fmtCap(sliderToCap(allCap.value)); };
+allCap.onchange = () => actAll('cap', {value: sliderToCap(allCap.value)});
 document.querySelectorAll('#all-effects button').forEach(b =>
   b.onclick = () => actAll('effect', {name: b.dataset.allfx}));
 
@@ -308,6 +395,21 @@ def effect(lid):
     return jsonify(payload(lid))
 
 
+@app.route("/light/<lid>/cap", methods=["POST"])
+def cap(lid):
+    light = _get(lid)
+    if not light:
+        return jsonify({"error": "unknown light"}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        value = float(data.get("value"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "value must be a number %s–1.0" % CAP_MIN}), 400
+    light["state"]["cap"] = max(CAP_MIN, min(1.0, value))
+    apply_state(light)
+    return jsonify(payload(lid))
+
+
 @app.route("/all/<action>", methods=["POST"])
 def all_action(action):
     """Apply one action to every light at once (master controls)."""
@@ -331,6 +433,13 @@ def all_action(action):
             return jsonify({"error": "name must be one of %s" % (EFFECTS,)}), 400
         for lid in order:
             lights[lid]["state"].update(effect=name, on=True)
+    elif action == "cap":
+        try:
+            value = max(CAP_MIN, min(1.0, float(data.get("value"))))
+        except (TypeError, ValueError):
+            return jsonify({"error": "value must be a number %s–1.0" % CAP_MIN}), 400
+        for lid in order:
+            lights[lid]["state"].update(cap=value)
     else:
         return jsonify({"error": "unknown action"}), 404
     for lid in order:

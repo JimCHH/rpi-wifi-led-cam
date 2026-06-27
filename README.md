@@ -344,15 +344,23 @@ light's state, e.g. `{"id": "light1", "name": "Light 1", "pin": 18,
 | POST   | `/light/<id>/off`             | —                          | Turn off          |
 | POST   | `/light/<id>/brightness`      | `{"value": 0.5}` (0.0–1.0) | Set brightness    |
 | POST   | `/light/<id>/effect`          | `{"name": "blink"}`        | Run an effect     |
+| POST   | `/light/<id>/cap`             | `{"value": 0.01}` (1e-4–1) | Set max-intensity cap |
 | POST   | `/all/on`                     | —                          | All lights on     |
 | POST   | `/all/off`                    | —                          | All lights off    |
 | POST   | `/all/brightness`             | `{"value": 0.5}` (0.0–1.0) | All brightness    |
 | POST   | `/all/effect`                 | `{"name": "blink"}`        | Effect on all     |
+| POST   | `/all/cap`                    | `{"value": 0.01}` (1e-4–1) | Cap on all        |
 
 `effect` names: `none` (solid), `blink`, `breathe` (fade in/out), `strobe`.
 Selecting an effect turns the light on; on/off/brightness return it to solid mode.
 The `/all/*` routes apply to every light at once (the **All lights** bar in the
 UI) and return the full array.
+
+**Max-intensity cap (eye-safety).** Each light has a `cap` (0.0001–1.0) that
+ceilings its output: solid output = `brightness × cap`, and **effects also peak
+at `cap`**. The UI exposes it as a **log-scale slider from 0.01% to 100%**, so
+you can dial the maximum way down (e.g. ~1%) when the LED is close to the eyes.
+Default is `1.0` (100%, no limit).
 
 Example from your Mac/PC:
 
