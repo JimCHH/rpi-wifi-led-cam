@@ -342,9 +342,15 @@ light's state, e.g. `{"id": "light1", "name": "Light 1", "pin": 18,
 | POST   | `/light/<id>/off`             | —                          | Turn off          |
 | POST   | `/light/<id>/brightness`      | `{"value": 0.5}` (0.0–1.0) | Set brightness    |
 | POST   | `/light/<id>/effect`          | `{"name": "blink"}`        | Run an effect     |
+| POST   | `/all/on`                     | —                          | All lights on     |
+| POST   | `/all/off`                    | —                          | All lights off    |
+| POST   | `/all/brightness`             | `{"value": 0.5}` (0.0–1.0) | All brightness    |
+| POST   | `/all/effect`                 | `{"name": "blink"}`        | Effect on all     |
 
 `effect` names: `none` (solid), `blink`, `breathe` (fade in/out), `strobe`.
 Selecting an effect turns the light on; on/off/brightness return it to solid mode.
+The `/all/*` routes apply to every light at once (the **All lights** bar in the
+UI) and return the full array.
 
 Example from your Mac/PC:
 

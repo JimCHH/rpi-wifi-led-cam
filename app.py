@@ -103,11 +103,32 @@ PAGE = """<!doctype html>
   .effects button { font-size: .85rem; padding: 7px 12px; background: #e6e6e6;
                     color: #222; }
   .effects button.active { background: #2d7ff9; color: #fff; }
+  .master { border: 2px solid #2d7ff9; border-radius: 16px; padding: 12px 20px;
+            max-width: 340px; margin: 0 auto 24px; }
+  .master strong { display: block; margin-bottom: 6px; }
   small { opacity: .6; }
 </style>
 </head>
 <body>
   <h1>Raspberry Pi WiFi LED</h1>
+  <div class="master">
+    <strong>All lights</strong>
+    <div class="row">
+      <button id="all-on">All On</button>
+      <button id="all-off" class="off">All Off</button>
+    </div>
+    <div class="row">
+      <label>Brightness (all)</label>
+      <input type="range" id="all-bright" min="0" max="100" value="100">
+      <div><span id="all-pct">100</span>%</div>
+    </div>
+    <div class="row effects" id="all-effects">
+      <button data-allfx="none">Solid</button>
+      <button data-allfx="blink">Blink</button>
+      <button data-allfx="breathe">Breathe</button>
+      <button data-allfx="strobe">Strobe</button>
+    </div>
+  </div>
   <div class="lights" id="lights"></div>
 <script>
 const container = document.getElementById('lights');
@@ -169,6 +190,24 @@ function update(l) {
   c.querySelectorAll('.effects button').forEach(b =>
     b.classList.toggle('active', l.on && b.dataset.fx === (l.effect || 'none')));
 }
+
+// Master controls: act on every light at once, then refresh all cards.
+async function actAll(path, body) {
+  const r = await fetch(`/all/${path}`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  (await r.json()).forEach(update);
+}
+
+document.getElementById('all-on').onclick = () => actAll('on');
+document.getElementById('all-off').onclick = () => actAll('off');
+const allBright = document.getElementById('all-bright');
+allBright.oninput = () => { document.getElementById('all-pct').textContent = allBright.value; };
+allBright.onchange = () => actAll('brightness', {value: allBright.value / 100});
+document.querySelectorAll('#all-effects button').forEach(b =>
+  b.onclick = () => actAll('effect', {name: b.dataset.allfx}));
 
 async function load() {
   const states = await (await fetch('/state')).json();
@@ -263,6 +302,36 @@ def effect(lid):
     light["state"]["on"] = True  # selecting an effect turns the light on
     apply_state(light)
     return jsonify(payload(lid))
+
+
+@app.route("/all/<action>", methods=["POST"])
+def all_action(action):
+    """Apply one action to every light at once (master controls)."""
+    data = request.get_json(silent=True) or {}
+    if action == "on":
+        for lid in order:
+            lights[lid]["state"].update(on=True, effect="none")
+    elif action == "off":
+        for lid in order:
+            lights[lid]["state"].update(on=False, effect="none")
+    elif action == "brightness":
+        try:
+            value = max(0.0, min(1.0, float(data.get("value"))))
+        except (TypeError, ValueError):
+            return jsonify({"error": "value must be a number 0.0–1.0"}), 400
+        for lid in order:
+            lights[lid]["state"].update(brightness=value, effect="none", on=value > 0)
+    elif action == "effect":
+        name = data.get("name")
+        if name not in EFFECTS:
+            return jsonify({"error": "name must be one of %s" % (EFFECTS,)}), 400
+        for lid in order:
+            lights[lid]["state"].update(effect=name, on=True)
+    else:
+        return jsonify({"error": "unknown action"}), 404
+    for lid in order:
+        apply_state(lights[lid])
+    return jsonify(all_payloads())
 
 
 if __name__ == "__main__":
