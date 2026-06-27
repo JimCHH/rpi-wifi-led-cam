@@ -10,7 +10,7 @@ WorkingDirectory=/home/pi/rpi-wifi-led
 ExecStart=/usr/bin/python3 /home/pi/rpi-wifi-led/app.py
 Restart=on-failure
 RestartSec=3
-Environment=LED_PIN=18
+Environment=LED_PINS=18,23
 Environment=PORT=5000
 
 [Install]

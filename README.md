@@ -1,9 +1,9 @@
 # rpi-wifi-led
 
-Control an LED on a **Raspberry Pi Zero 2 W** GPIO from your **Mac or PC over WiFi** —
-no internet required. The Pi runs a tiny web server; you open its address in a
-browser to toggle the LED, set brightness, and run effects (blink / breathe /
-strobe).
+Control one or more LEDs on a **Raspberry Pi Zero 2 W** GPIO from your **Mac or
+PC over WiFi** — no internet required. The Pi runs a tiny web server; you open
+its address in a browser to toggle each light, set brightness, and run effects
+(blink / breathe / strobe). Each light is independent, with its own card.
 
 > "Regardless the internet is available" → you don't need the *internet*, only a
 > shared *local network* between the Pi and your computer. Two ways to get that
@@ -11,20 +11,23 @@ strobe).
 
 ---
 
-## 1. Hardware — where to attach the LED
+## 1. Hardware — where to attach the LED(s)
 
-You need: 1 LED, 1 resistor (**220 Ω – 330 Ω**), 2 jumper wires (and ideally a
-breadboard).
+Per LED you need: 1 LED, 1 resistor (**220 Ω – 330 Ω**), 2 jumper wires (and
+ideally a breadboard). The app drives **two independent lights by default**
+(GPIO18 and GPIO23) — wire one or both.
 
-The Pi Zero 2 W has the standard 40-pin header. Wire the LED to **GPIO18**:
+The Pi Zero 2 W has the standard 40-pin header:
 
 ```
- GPIO18 (BCM)  ───[ 330Ω resistor ]───►|─── GND
- physical pin 12                       LED        physical pin 14 (or 6, 9, 20…)
+ Light 1: GPIO18 (pin 12) ──[ 330Ω ]──►|── GND (pin 14)
+ Light 2: GPIO23 (pin 16) ──[ 330Ω ]──►|── GND (pin 20, or share a GND)
 ```
 
-- **LED long leg (anode, +)** → through the **resistor** → **GPIO18 (physical pin 12)**
-- **LED short leg (cathode, –, flat side)** → **GND (physical pin 14)**
+For each LED:
+- **Long leg (anode, +)** → through the **resistor** → its **GPIO pin**
+- **Short leg (cathode, –, flat side)** → **GND** (any ground pin; LEDs can
+  share a common ground)
 
 The resistor can go on either leg; it just limits current so the LED doesn't burn out.
 
@@ -36,13 +39,19 @@ Pin reference (the corner with pin 1 is nearest the SD-card / micro-USB edge):
       GPIO3  (5) (6)  GND
       GPIO4  (7) (8)  GPIO14
         GND  (9) (10) GPIO15
-     GPIO17 (11) (12) GPIO18   ← LED via resistor here (pin 12)
-     GPIO27 (13) (14) GND      ← LED ground here (pin 14)
+     GPIO17 (11) (12) GPIO18   ← Light 1 via resistor (pin 12)
+     GPIO27 (13) (14) GND      ← Light 1 ground (pin 14)
+     GPIO22 (15) (16) GPIO23   ← Light 2 via resistor (pin 16)
+        3V3 (17) (18) GPIO24
+     GPIO10 (19) (20) GND      ← Light 2 ground (pin 20)
       ...
 ```
 
-Why GPIO18? It supports **hardware PWM**, giving smooth, flicker-free brightness
-control. (On/off works on any GPIO, but brightness is nicest on GPIO18.)
+GPIO18 supports **hardware PWM** (smoothest brightness); the other pins use
+lgpio's PWM, which is perfectly fine for LEDs. **Add more lights** by setting
+`LED_PINS` (e.g. `LED_PINS=18,23,24`) and optional `LED_NAMES="Desk,Shelf,Lamp"`
+— each gets its own card in the web UI. See `install-service.sh` to bake the
+pin list into the autostart service.
 
 ---
 
@@ -181,17 +190,34 @@ can't also be on your home WiFi — it's one or the other.)
 
 ---
 
-## 6. Run automatically on boot (optional)
+## 6. Run automatically on boot + stay reachable
 
-So you don't have to start `app.py` by hand each time, install the systemd
-service with the helper (it fills in your username and repo path automatically):
+The helper installs the autostart service **and** applies the stability fixes
+so the Pi keeps a fixed address and doesn't drop off WiFi:
 
 ```bash
 ./install-service.sh
+sudo reboot          # applies the network changes
 ```
 
-Now the server starts on every boot — just apply power and browse to the Pi.
-Useful commands:
+It does four things: enables the systemd service (fills in your username/path
+automatically), **disables WiFi power-save** (which otherwise drops the link
+when idle), **pins a static IP** (`192.168.0.79` by default), and generates a
+UTF-8 locale (silences SSH warnings). Override any of them:
+
+```bash
+STATIC_IP="" ./install-service.sh                # keep DHCP instead of static
+LED_PINS=18,23,24 ./install-service.sh           # drive three lights
+STATIC_IP=192.168.1.50/24 ./install-service.sh   # different fixed address
+```
+
+> The static IP defaults to `192.168.0.79/24` and auto-detects your gateway.
+> If your network isn't `192.168.0.x`, pass your own `STATIC_IP`, or use
+> `STATIC_IP=""` and instead set a DHCP reservation in your router. Revert to
+> DHCP anytime: `sudo nmcli connection modify preconfigured ipv4.method auto`.
+
+After reboot the server starts on every boot — just apply power and browse to
+`http://192.168.0.79:5000`. Useful commands:
 
 ```bash
 systemctl status rpi-wifi-led        # is it running?
@@ -254,31 +280,74 @@ gives years of service.
 
 ---
 
+## 8. Take it anywhere: roaming + hotspot fallback
+
+Moving the Pi to a new place with different WiFi does **not** require re-flashing
+— you just teach it the new network, and it remembers all of them. Two helpers
+make this painless.
+
+### Add networks it should auto-join
+
+Run this for each place (home, office, **your phone's hotspot**, …) while the Pi
+is reachable. It then auto-joins whichever is in range:
+
+```bash
+./add-wifi.sh "NEW_SSID" "NEW_PASSWORD"
+```
+
+> Tip: add your **phone hotspot** as one of them. Anywhere you go, enable the
+> hotspot, connect your Mac to it too, and `ssh pi@raspberrypi.local` — your
+> phone becomes the shared network, so you're never locked out.
+
+### Fall back to the Pi's own hotspot when no known WiFi exists
+
+```bash
+./setup-autohotspot.sh                                   # default SSID PiLED / pass raspberry
+HOTSPOT_SSID=MyPi HOTSPOT_PASS=supersecret ./setup-autohotspot.sh   # custom
+```
+
+After this, at every boot/check:
+
+- **A known WiFi is in range** → it joins normally.
+- **No known WiFi** → it starts its **own hotspot**. Connect your Mac to that
+  SSID, then reach it at **`ssh pi@10.42.0.1`** / **`http://10.42.0.1:5000`** —
+  no router, no internet, works literally anywhere.
+
+To switch back from hotspot mode to a known WiFi, reboot near that network (or
+`sudo systemctl restart pi-autohotspot`) — the script avoids scanning while the
+hotspot is live so it doesn't drop connected clients.
+
+> Note on access while you're *away* from the Pi (different building): SSH/HTTP
+> only need a **shared local network**, not the internet. To reach it remotely
+> over the internet you'd add a VPN/tunnel such as Tailscale — out of scope here.
+
+---
+
 ## API (if you want to script it)
 
-All return the current state as JSON: `{"on": true, "brightness": 1.0}`.
+Each light is addressed by id (`light1`, `light2`, …). Routes return that
+light's state, e.g. `{"id": "light1", "name": "Light 1", "pin": 18,
+"on": true, "brightness": 1.0, "effect": "none"}`.
 
-| Method | Path           | Body                       | Action                |
-|--------|----------------|----------------------------|-----------------------|
-| GET    | `/`            | —                          | Control web page      |
-| GET    | `/state`       | —                          | Current state         |
-| POST   | `/toggle`      | —                          | Flip on/off           |
-| POST   | `/on`          | —                          | Turn on               |
-| POST   | `/off`         | —                          | Turn off              |
-| POST   | `/brightness`  | `{"value": 0.5}` (0.0–1.0) | Set brightness        |
-| POST   | `/effect`      | `{"name": "blink"}`        | Run an effect         |
+| Method | Path                          | Body                       | Action            |
+|--------|-------------------------------|----------------------------|-------------------|
+| GET    | `/`                           | —                          | Control web page  |
+| GET    | `/state`                      | —                          | Array of all lights |
+| POST   | `/light/<id>/toggle`          | —                          | Flip on/off       |
+| POST   | `/light/<id>/on`              | —                          | Turn on           |
+| POST   | `/light/<id>/off`             | —                          | Turn off          |
+| POST   | `/light/<id>/brightness`      | `{"value": 0.5}` (0.0–1.0) | Set brightness    |
+| POST   | `/light/<id>/effect`          | `{"name": "blink"}`        | Run an effect     |
 
 `effect` names: `none` (solid), `blink`, `breathe` (fade in/out), `strobe`.
-Selecting an effect turns the LED on; pressing on/off/brightness returns it to
-solid mode. State JSON includes the active effect, e.g.
-`{"on": true, "brightness": 1.0, "effect": "breathe"}`.
+Selecting an effect turns the light on; on/off/brightness return it to solid mode.
 
 Example from your Mac/PC:
 
 ```bash
-curl -X POST http://192.168.1.42:5000/on
-curl -X POST http://192.168.1.42:5000/brightness -H 'Content-Type: application/json' -d '{"value":0.3}'
-curl -X POST http://192.168.1.42:5000/effect -H 'Content-Type: application/json' -d '{"name":"breathe"}'
+curl -X POST http://192.168.0.79:5000/light/light1/on
+curl -X POST http://192.168.0.79:5000/light/light2/brightness -H 'Content-Type: application/json' -d '{"value":0.3}'
+curl -X POST http://192.168.0.79:5000/light/light1/effect -H 'Content-Type: application/json' -d '{"name":"breathe"}'
 ```
 
 ---
