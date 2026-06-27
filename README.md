@@ -48,9 +48,11 @@ Pin reference (the corner with pin 1 is nearest the SD-card / micro-USB edge):
 ```
 
 GPIO18 supports **hardware PWM** (smoothest brightness); the other pins use
-lgpio's PWM, which is perfectly fine for LEDs. PWM runs at **1000 Hz** by default
-for flicker-free dimming — tune it with `PWM_HZ` (e.g. `PWM_HZ=2000`). **Add more
-lights** by setting
+lgpio's PWM, which is perfectly fine for LEDs. PWM runs at **500 Hz** by default
+— a balance between smoothness and reaching dim levels. Tune it with `PWM_HZ`:
+*lower* (e.g. `200`) reaches dimmer brightness but may flicker; *higher* is
+smoother but can't render very low brightness (software PWM has a minimum pulse
+width, so the dim floor rises with frequency). **Add more lights** by setting
 `LED_PINS` (e.g. `LED_PINS=18,23,24`) and optional `LED_NAMES="Desk,Shelf,Lamp"`
 — each gets its own card in the web UI. See `install-service.sh` to bake the
 pin list into the autostart service.
