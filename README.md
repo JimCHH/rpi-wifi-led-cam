@@ -200,24 +200,28 @@ so the Pi keeps a fixed address and doesn't drop off WiFi:
 sudo reboot          # applies the network changes
 ```
 
-It does four things: enables the systemd service (fills in your username/path
-automatically), **disables WiFi power-save** (which otherwise drops the link
-when idle), **pins a static IP** (`192.168.0.79` by default), and generates a
-UTF-8 locale (silences SSH warnings). Override any of them:
+It does three things by default: enables the systemd service (fills in your
+username/path automatically), **disables WiFi power-save** on your active
+connection (which otherwise drops the link when idle), and generates a UTF-8
+locale (silences SSH warnings). It **stays on DHCP** — roaming-friendly, so it's
+safe to run at any location. Override anything:
 
 ```bash
-STATIC_IP="" ./install-service.sh                # keep DHCP instead of static
 LED_PINS=18,23,24 ./install-service.sh           # drive three lights
-STATIC_IP=192.168.1.50/24 ./install-service.sh   # different fixed address
+WIFI_CONN="MyWiFi" ./install-service.sh          # force a connection profile
+STATIC_IP=192.168.1.50/24 ./install-service.sh   # opt in to a fixed IP (advanced)
 ```
 
-> The static IP defaults to `192.168.0.79/24` and auto-detects your gateway.
-> If your network isn't `192.168.0.x`, pass your own `STATIC_IP`, or use
-> `STATIC_IP=""` and instead set a DHCP reservation in your router. Revert to
-> DHCP anytime: `sudo nmcli connection modify preconfigured ipv4.method auto`.
+> **Static IP is off by default on purpose.** A fixed address only works on the
+> subnet it was set for, so pinning one and then moving the Pi to another network
+> makes it unreachable. For a Pi that travels, stay on DHCP and find it via
+> `raspberrypi.local`, your router's device list, or the `PiLED` hotspot. If you
+> *do* want a fixed address on a permanent network, pass `STATIC_IP` (and prefer
+> a DHCP reservation in your router). Revert anytime:
+> `sudo nmcli connection modify <conn> ipv4.method auto`.
 
 After reboot the server starts on every boot — just apply power and browse to
-`http://192.168.0.79:5000`. Useful commands:
+the Pi. Useful commands:
 
 ```bash
 systemctl status rpi-wifi-led        # is it running?
