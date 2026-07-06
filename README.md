@@ -359,7 +359,8 @@ Then view the stream from your Mac/PC:
 | **WebRTC** | `http://<pi>:8889/cam` | Browser, low latency |
 | **RTSP** | `rtsp://<pi>:8554/cam` | VLC / OBS / apps |
 
-The LED control page also shows a **📹 Camera stream** link (to the HLS URL).
+The LED control page has a **📹 Show camera** button that embeds the live stream
+inline (plus an "open in new tab" link). The player loads only when you show it.
 
 **Resolution / frame rate.** It queries the camera's supported modes and picks:
 the project presets **1280×480 → 1280×400** if available, otherwise the camera's
