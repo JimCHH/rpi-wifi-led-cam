@@ -168,6 +168,10 @@ PAGE = """<!doctype html>
   .master { border: 2px solid #2d7ff9; border-radius: 16px; padding: 12px 20px;
             max-width: 340px; margin: 0 auto 24px; }
   .master strong { display: block; margin-bottom: 6px; }
+  .camera { margin-top: 28px; }
+  #camwrap { display: none; margin: 12px auto 6px; max-width: 640px; }
+  #camframe { width: 100%; height: 380px; border: 0; border-radius: 12px;
+              background: #000; }
   small { opacity: .6; }
 </style>
 </head>
@@ -197,11 +201,30 @@ PAGE = """<!doctype html>
     </div>
   </div>
   <div class="lights" id="lights"></div>
-  <p style="margin-top:28px"><a id="camlink" target="_blank" rel="noopener">📹 Camera stream</a></p>
+  <div class="camera">
+    <button id="camtoggle">📹 Show camera</button>
+    <div id="camwrap"><iframe id="camframe" allow="autoplay; fullscreen"></iframe></div>
+    <p><a id="camlink" target="_blank" rel="noopener">Open stream in new tab ↗</a></p>
+  </div>
 <script>
-// Camera stream (MediaMTX HLS) lives on the same host, port 8888. See setup-camera.sh.
-document.getElementById('camlink').href =
-  location.protocol + '//' + location.hostname + ':8888/cam';
+// Camera stream served by MediaMTX on the same host, port 8888 (HLS player).
+const camBase = location.protocol + '//' + location.hostname + ':8888/cam';
+document.getElementById('camlink').href = camBase;
+const camtoggle = document.getElementById('camtoggle');
+const camwrap = document.getElementById('camwrap');
+const camframe = document.getElementById('camframe');
+camtoggle.onclick = () => {
+  const showing = camwrap.style.display === 'block';
+  if (showing) {
+    camframe.src = 'about:blank';           // stop the stream when hidden
+    camwrap.style.display = 'none';
+    camtoggle.textContent = '📹 Show camera';
+  } else {
+    camframe.src = camBase;                 // load only when the user asks
+    camwrap.style.display = 'block';
+    camtoggle.textContent = '📹 Hide camera';
+  }
+};
 
 const container = document.getElementById('lights');
 const EFFECTS = ['none', 'blink', 'breathe', 'strobe'];
