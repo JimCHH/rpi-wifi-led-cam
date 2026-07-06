@@ -361,9 +361,18 @@ Then view the stream from your Mac/PC:
 
 The LED control page also shows a **📹 Camera stream** link (to the HLS URL).
 
-**Resolution / frame rate.** By default it auto-selects **1280×480**, falling
-back to **1280×400** based on what the camera advertises, at **30 fps**. Override
-per the `camera-stream.service` (or export before running the script):
+**Resolution / frame rate.** It queries the camera's supported modes and picks:
+the project presets **1280×480 → 1280×400** if available, otherwise the camera's
+**largest advertised size** (so a 640×480 debug cam streams at 640×480, not a
+broken 1280×480), at **30 fps**. The pixel format (MJPEG vs YUYV) is auto-picked
+too. The service log shows the advertised sizes and the exact mode it streams:
+
+```
+camera-publish: /dev/video0 advertises sizes: 320x240 640x480 1280x480
+camera-publish: STREAMING 1280x480 @ 30fps  format=mjpeg  ->  rtsp://localhost:8554/cam
+```
+
+Override per the `camera-stream.service` (or export before running the script):
 
 ```bash
 sudo systemctl edit camera-stream      # add, e.g.:
