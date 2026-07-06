@@ -197,7 +197,12 @@ PAGE = """<!doctype html>
     </div>
   </div>
   <div class="lights" id="lights"></div>
+  <p style="margin-top:28px"><a id="camlink" target="_blank" rel="noopener">📹 Camera stream</a></p>
 <script>
+// Camera stream (MediaMTX HLS) lives on the same host, port 8888. See setup-camera.sh.
+document.getElementById('camlink').href =
+  location.protocol + '//' + location.hostname + ':8888/cam';
+
 const container = document.getElementById('lights');
 const EFFECTS = ['none', 'blink', 'breathe', 'strobe'];
 const LABELS = {none: 'Solid', blink: 'Blink', breathe: 'Breathe', strobe: 'Strobe'};

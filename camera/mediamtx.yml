@@ -1,0 +1,26 @@
+# MediaMTX config for rpi-wifi-led-cam.
+# The camera-stream service publishes an H.264 stream to the "cam" path over
+# RTSP; MediaMTX then serves it to browsers (HLS/WebRTC) and apps (RTSP).
+
+logLevel: info
+
+# --- RTSP: ingest from ffmpeg + playback in VLC/apps ---
+rtsp: yes
+rtspAddress: :8554
+
+# --- HLS: browser playback, most reliable on a LAN (a few seconds latency) ---
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAlwaysRemux: yes
+
+# --- WebRTC: browser playback, low latency (may need webrtcAdditionalHosts on
+#     some networks; HLS is the fallback if WebRTC won't connect) ---
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+
+paths:
+  # camera-publish.sh publishes here; "source: publisher" accepts that stream.
+  cam:
+    source: publisher

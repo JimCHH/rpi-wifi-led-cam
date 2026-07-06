@@ -1,9 +1,11 @@
-# rpi-wifi-led
+# rpi-wifi-led-cam
 
 Control one or more LEDs on a **Raspberry Pi Zero 2 W** GPIO from your **Mac or
-PC over WiFi** — no internet required. The Pi runs a tiny web server; you open
-its address in a browser to toggle each light, set brightness, and run effects
-(blink / breathe / strobe). Each light is independent, with its own card.
+PC over WiFi** — no internet required — **and stream a connected camera** over
+the network. The Pi runs a tiny web server; you open its address in a browser to
+toggle each light, set brightness, and run effects (blink / breathe / strobe).
+Each light is independent, with its own card. A connected camera is streamed via
+[MediaMTX](https://github.com/bluenviron/mediamtx) (see [§9](#9-camera-streaming-mediamtx)).
 
 > "Regardless the internet is available" → you don't need the *internet*, only a
 > shared *local network* between the Pi and your computer. Two ways to get that
@@ -328,6 +330,62 @@ hotspot is live so it doesn't drop connected clients.
 > Note on access while you're *away* from the Pi (different building): SSH/HTTP
 > only need a **shared local network**, not the internet. To reach it remotely
 > over the internet you'd add a VPN/tunnel such as Tailscale — out of scope here.
+
+---
+
+## 9. Camera streaming (MediaMTX)
+
+Stream a connected camera (e.g. a USB stereo cam that outputs **1280×480** or
+**1280×400** at **30 fps**) over the network using
+[MediaMTX](https://github.com/bluenviron/mediamtx). Install it on the Pi:
+
+```bash
+cd ~/rpi-wifi-led
+./setup-camera.sh
+```
+
+This installs MediaMTX + ffmpeg and two services:
+
+- **`mediamtx`** — the media server (RTSP/HLS/WebRTC).
+- **`camera-stream`** — waits for a camera, then publishes it. It **streams
+  whenever a camera is connected**: if none is present it waits; if the camera is
+  unplugged, ffmpeg stops and it goes back to waiting; replug and it resumes.
+
+Then view the stream from your Mac/PC:
+
+| Protocol | URL | Notes |
+|----------|-----|-------|
+| **HLS** | `http://<pi>:8888/cam` | Browser, most reliable on a LAN (~few s latency) |
+| **WebRTC** | `http://<pi>:8889/cam` | Browser, low latency |
+| **RTSP** | `rtsp://<pi>:8554/cam` | VLC / OBS / apps |
+
+The LED control page also shows a **📹 Camera stream** link (to the HLS URL).
+
+**Resolution / frame rate.** By default it auto-selects **1280×480**, falling
+back to **1280×400** based on what the camera advertises, at **30 fps**. Override
+per the `camera-stream.service` (or export before running the script):
+
+```bash
+sudo systemctl edit camera-stream      # add, e.g.:
+# [Service]
+# Environment=CAM_SIZE=1280x400
+# Environment=CAM_FPS=30
+sudo systemctl restart camera-stream
+```
+
+Encoding uses the Pi's **hardware H.264** (`h264_v4l2m2m`) when available, falling
+back to software `libx264`. Useful commands:
+
+```bash
+systemctl status mediamtx camera-stream   # are they running?
+journalctl -u camera-stream -f            # live camera/ffmpeg logs
+v4l2-ctl --list-devices                   # confirm the camera is detected
+v4l2-ctl -d /dev/video0 --list-formats-ext   # see supported sizes/rates
+```
+
+> **USB vs CSI:** this targets a **USB (UVC)** camera at `/dev/video0` (typical for
+> 1280×480 stereo cams). For a **CSI ribbon** camera, capture with `rpicam-vid`
+> piped into ffmpeg instead — ask and we'll add that variant.
 
 ---
 
