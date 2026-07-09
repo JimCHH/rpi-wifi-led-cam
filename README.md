@@ -410,6 +410,39 @@ v4l2-ctl -d /dev/video0 --list-formats-ext   # see supported sizes/rates
 
 ---
 
+## 10. Dashboard (CPU / thermal / battery)
+
+The control page shows a small live dashboard (polled every 2 s) with:
+
+- **CPU** — busy % (turns amber ≥70%, red ≥90%),
+- **Temp** — SoC temperature in °C (amber ≥70 °C, red ≥80 °C — watch for throttling),
+- **Battery** — from a **Waveshare UPS HAT** (INA219 over I2C): percentage, ⚡ when
+  charging, and pack voltage. Shows `n/a` if no HAT / I2C is present.
+
+`GET /stats` returns the same data as JSON:
+```json
+{"cpu_percent": 12.5, "temp_c": 54.2,
+ "battery": {"present": true, "percent": 87, "voltage": 4.05, "current_ma": -320, "charging": false}}
+```
+
+**Battery setup.** `./setup.sh` installs `python3-smbus`/`i2c-tools` and enables
+I2C (reboot once to apply). The reader assumes a single-cell INA219 HAT at
+address `0x43`; override via env if yours differs:
+
+```bash
+sudo systemctl edit rpi-wifi-led     # add, e.g.:
+# [Service]
+# Environment=UPS_I2C_ADDR=0x42
+# Environment=UPS_V_FULL=4.2
+# Environment=UPS_V_EMPTY=3.0
+# Environment=UPS_CURRENT_SIGN=-1   # if charging/discharging shows inverted
+```
+
+Confirm the HAT is on the bus with `i2cdetect -y 1` (look for `43`). CPU and temp
+work with no extra hardware.
+
+---
+
 ## API (if you want to script it)
 
 Each light is addressed by id (`light1`, `light2`, …). Routes return that
@@ -420,6 +453,7 @@ light's state, e.g. `{"id": "light1", "name": "Light 1", "pin": 18,
 |--------|-------------------------------|----------------------------|-------------------|
 | GET    | `/`                           | —                          | Control web page  |
 | GET    | `/state`                      | —                          | Array of all lights |
+| GET    | `/stats`                      | —                          | CPU / temp / battery |
 | POST   | `/light/<id>/toggle`          | —                          | Flip on/off       |
 | POST   | `/light/<id>/on`              | —                          | Turn on           |
 | POST   | `/light/<id>/off`             | —                          | Turn off          |

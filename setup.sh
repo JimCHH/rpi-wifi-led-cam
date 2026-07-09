@@ -13,6 +13,13 @@ echo "==> Installing prebuilt dependencies from apt (no compiler needed)…"
 sudo apt update
 sudo apt install -y python3-flask python3-gpiozero python3-lgpio
 
+# For the dashboard's UPS-HAT battery gauge (I2C/INA219). Harmless without a HAT.
+echo "==> Installing I2C tools for the UPS-HAT battery gauge…"
+sudo apt install -y python3-smbus i2c-tools || true
+if command -v raspi-config >/dev/null 2>&1; then
+  sudo raspi-config nonint do_i2c 0 || true   # enable I2C (needs a reboot to apply)
+fi
+
 echo
 echo "Done — no virtualenv needed. Start the server with:"
 echo "    python3 app.py"
