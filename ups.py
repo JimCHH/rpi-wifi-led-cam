@@ -1,5 +1,8 @@
 """Best-effort battery reader for Waveshare INA219-based UPS HATs.
 
+Defaults are tuned for the Waveshare UPS HAT (C) — the Pi Zero-sized UPS with a
+single Li-ion cell and an INA219 at 0x43 — matching its reference driver.
+
 The common Waveshare UPS HATs expose an INA219 current/voltage monitor over I2C.
 This reads battery voltage + current and estimates a percentage. It degrades
 gracefully (returns {"present": False, ...}) when I2C is off, no HAT is present,
