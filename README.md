@@ -362,16 +362,27 @@ Then view the stream from your Mac/PC:
 The LED control page has a **📹 Show camera** button that embeds the live stream
 inline (plus an "open in new tab" link). The player loads only when you show it.
 
-**Resolution / frame rate.** It queries the camera's supported modes and picks:
-the project presets **1280×480 → 1280×400** if available, otherwise the camera's
-**largest advertised size** (so a 640×480 debug cam streams at 640×480, not a
-broken 1280×480), at **30 fps**. The pixel format (MJPEG vs YUYV) is auto-picked
-too. The service log shows the advertised sizes and the exact mode it streams:
+**Resolution / frame rate / codec.** It picks the size (presets **1280×480 →
+1280×400**, else the camera's largest), then the **highest fps the camera
+advertises** for that size, and a codec strategy tuned for **max stable fps**:
+
+- **Camera outputs H.264** (onboard ISP) → **stream-copy, no transcode**. The Pi
+  doesn't decode or encode, so fps is limited only by the camera + USB2 + WiFi —
+  not the Pi's CPU or hardware encoder. This is how you get high fps on a Zero.
+- **Camera outputs MJPEG** → transcode to H.264 with the hardware encoder
+  (browser-playable, but capped by the encoder). `CAM_MODE=copy` passes MJPEG
+  through untouched (higher fps, but RTSP-only — not HLS/WebRTC).
+- **YUYV only** → transcode; limited by USB2 bandwidth.
+
+The service log shows what it chose:
 
 ```
 camera-publish: /dev/video0 advertises sizes: 320x240 640x480 1280x480
-camera-publish: STREAMING 1280x480 @ 30fps  format=mjpeg  ->  rtsp://localhost:8554/cam
+camera-publish: STREAMING 1280x480 @ 60fps  codec=h264  copy (H.264 passthrough — no Pi transcode)  ->  ...
 ```
+
+Force any of it with `CAM_SIZE`, `CAM_FPS`, `CAM_CODEC` (`h264`/`mjpeg`/`yuyv`),
+`CAM_MODE`, `CAM_BITRATE`.
 
 Override per the `camera-stream.service` (or export before running the script):
 
