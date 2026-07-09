@@ -425,9 +425,11 @@ The control page shows a small live dashboard (polled every 2 s) with:
  "battery": {"present": true, "percent": 87, "voltage": 4.05, "current_ma": -320, "charging": false}}
 ```
 
-**Battery setup.** `./setup.sh` installs `python3-smbus`/`i2c-tools` and enables
-I2C (reboot once to apply). The reader assumes a single-cell INA219 HAT at
-address `0x43`; override via env if yours differs:
+**Battery setup.** Tuned for the **Waveshare UPS HAT (C)** (the Pi Zero-sized
+UPS, single Li-ion cell, INA219 @ `0x43`) — the defaults match its reference
+driver, so it works out of the box. `./setup.sh` installs
+`python3-smbus`/`i2c-tools` and enables I2C (reboot once to apply). Override via
+env for other INA219 HATs:
 
 ```bash
 sudo systemctl edit rpi-wifi-led     # add, e.g.:
