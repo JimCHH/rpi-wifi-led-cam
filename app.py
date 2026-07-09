@@ -19,6 +19,11 @@ import os
 import threading
 from flask import Flask, jsonify, request, Response
 
+try:
+    import ups  # Waveshare UPS HAT battery reader (best-effort)
+except Exception:  # pragma: no cover - never let this break the app
+    ups = None
+
 # gpiozero is the modern, recommended GPIO library on Raspberry Pi OS.
 # PWMLED lets us control brightness (0.0–1.0), not just on/off.
 from gpiozero import PWMLED
@@ -168,6 +173,15 @@ PAGE = """<!doctype html>
   .master { border: 2px solid #2d7ff9; border-radius: 16px; padding: 12px 20px;
             max-width: 340px; margin: 0 auto 24px; }
   .master strong { display: block; margin-bottom: 6px; }
+  .dash { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+          margin: 0 auto 22px; }
+  .stat { border: 1px solid #8884; border-radius: 12px; padding: 8px 16px;
+          min-width: 90px; }
+  .stat .k { font-size: .75rem; opacity: .6; text-transform: uppercase;
+             letter-spacing: .04em; }
+  .stat .v { font-size: 1.25rem; font-weight: 600; }
+  .stat .v.warn { color: #e08a00; }
+  .stat .v.crit { color: #e02d2d; }
   .camera { margin-top: 28px; }
   #camwrap { display: none; margin: 12px auto 6px; max-width: 640px; }
   #camframe { width: 100%; height: 380px; border: 0; border-radius: 12px;
@@ -177,6 +191,11 @@ PAGE = """<!doctype html>
 </head>
 <body>
   <h1>Raspberry Pi WiFi LED</h1>
+  <div class="dash">
+    <div class="stat"><div class="k">CPU</div><div class="v" id="s-cpu">–</div></div>
+    <div class="stat"><div class="k">Temp</div><div class="v" id="s-temp">–</div></div>
+    <div class="stat"><div class="k">Battery</div><div class="v" id="s-batt">–</div></div>
+  </div>
   <div class="master">
     <strong>All lights</strong>
     <div class="row">
@@ -318,6 +337,31 @@ allCap.onchange = () => actAll('cap', {value: allCap.value / 100});
 document.querySelectorAll('#all-effects button').forEach(b =>
   b.onclick = () => actAll('effect', {name: b.dataset.allfx}));
 
+// System dashboard: poll CPU / temp / battery every 2s.
+function setStat(id, text, cls) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'v' + (cls ? ' ' + cls : '');
+}
+async function pollStats() {
+  let s;
+  try { s = await (await fetch('/stats')).json(); } catch (e) { return; }
+  setStat('s-cpu', s.cpu_percent == null ? '–' : s.cpu_percent + '%',
+          s.cpu_percent >= 90 ? 'crit' : s.cpu_percent >= 70 ? 'warn' : '');
+  setStat('s-temp', s.temp_c == null ? '–' : s.temp_c + '°C',
+          s.temp_c >= 80 ? 'crit' : s.temp_c >= 70 ? 'warn' : '');
+  const b = s.battery || {};
+  if (b.present) {
+    setStat('s-batt', `${b.percent}%${b.charging ? ' ⚡' : ''} · ${b.voltage}V`,
+            (!b.charging && b.percent <= 15) ? 'crit'
+              : (!b.charging && b.percent <= 30) ? 'warn' : '');
+  } else {
+    setStat('s-batt', 'n/a');
+  }
+}
+setInterval(pollStats, 2000);
+pollStats();
+
 async function load() {
   const states = await (await fetch('/state')).json();
   container.innerHTML = states.map(cardHtml).join('');
@@ -339,6 +383,50 @@ def index():
 @app.route("/state")
 def get_state():
     return jsonify(all_payloads())
+
+
+# --- System dashboard (CPU / thermal / battery) ------------------------------
+_prev_cpu = None
+
+
+def cpu_percent():
+    """CPU busy % since the previous call (from /proc/stat deltas)."""
+    global _prev_cpu
+    try:
+        with open("/proc/stat") as f:
+            vals = [int(x) for x in f.readline().split()[1:]]
+    except Exception:
+        return None
+    idle = vals[3] + (vals[4] if len(vals) > 4 else 0)  # idle + iowait
+    total = sum(vals)
+    prev = _prev_cpu
+    _prev_cpu = (idle, total)
+    if prev is None:
+        return None
+    d_total = total - prev[1]
+    d_idle = idle - prev[0]
+    if d_total <= 0:
+        return None
+    return round((1 - d_idle / d_total) * 100, 1)
+
+
+def cpu_temp():
+    """CPU temperature in °C, or None."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return round(int(f.read().strip()) / 1000.0, 1)
+    except Exception:
+        return None
+
+
+@app.route("/stats")
+def stats():
+    battery = ups.read() if ups else {"present": False, "reason": "module missing"}
+    return jsonify({
+        "cpu_percent": cpu_percent(),
+        "temp_c": cpu_temp(),
+        "battery": battery,
+    })
 
 
 def _get(lid):
