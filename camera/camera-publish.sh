@@ -99,6 +99,10 @@ fi
 
 echo "camera-publish: STREAMING ${SIZE} @ ${FPS}fps  codec=${CODEC}  ${STRATEGY}  ->  $RTSP"
 
+# Record the chosen mode so the LED dashboard can show the stream's fps/size.
+printf '{"size":"%s","fps":%s,"codec":"%s"}\n' "$SIZE" "$FPS" "$CODEC" \
+  > "${CAM_INFO:-/dev/shm/rpi-cam-info}" 2>/dev/null || true
+
 exec ffmpeg -hide_banner -loglevel warning -nostdin \
   -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
   "${VENC[@]}" \

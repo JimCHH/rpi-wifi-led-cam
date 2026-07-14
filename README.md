@@ -417,13 +417,25 @@ The control page shows a small live dashboard (polled every 2 s) with:
 - **CPU** — busy % (turns amber ≥70%, red ≥90%),
 - **Temp** — SoC temperature in °C (amber ≥70 °C, red ≥80 °C — watch for throttling),
 - **Battery** — from a **Waveshare UPS HAT** (INA219 over I2C): percentage, ⚡ when
-  charging, and pack voltage. Shows `n/a` if no HAT / I2C is present.
+  charging, and pack voltage. Shows `n/a` if no HAT / I2C is present (hover the
+  tile to see why).
+- **HLS / WebRTC / RTSP** — the stream's **fps** and live **viewer count** (`▸N`)
+  per protocol. All three carry the *same* encoded stream, so the fps is the
+  published source rate; they differ in latency/overhead, not frame rate. This is
+  read from the encoder's chosen mode + MediaMTX's local API (metadata only) —
+  **no probing of the video**, so it doesn't affect the stream.
 
 `GET /stats` returns the same data as JSON:
 ```json
 {"cpu_percent": 12.5, "temp_c": 54.2,
- "battery": {"present": true, "percent": 87, "voltage": 4.05, "current_ma": -320, "charging": false}}
+ "battery": {"present": true, "percent": 87, "voltage": 4.05, "current_ma": -320, "charging": false},
+ "stream": {"publishing": true, "fps": 60, "size": "1280x480", "codec": "h264",
+            "protocols": {"hls": 1, "webrtc": 0, "rtsp": 0}}}
 ```
+
+> The per-protocol counts need the MediaMTX API (enabled in `camera/mediamtx.yml`);
+> re-run `./setup-camera.sh` (or recopy the config and `sudo systemctl restart
+> mediamtx`) after updating.
 
 **Battery setup.** Tuned for the **Waveshare UPS HAT (C)** (the Pi Zero-sized
 UPS, single Li-ion cell, INA219 @ `0x43`) — the defaults match its reference
@@ -442,6 +454,17 @@ sudo systemctl edit rpi-wifi-led     # add, e.g.:
 
 Confirm the HAT is on the bus with `i2cdetect -y 1` (look for `43`). CPU and temp
 work with no extra hardware.
+
+**Battery still `n/a`?** Hover the tile or `curl http://<pi>:5000/stats` to read
+`battery.reason`, then:
+- `smbus not installed` → run `./setup.sh` (installs `python3-smbus`).
+- `[Errno 2] No such file or directory: '/dev/i2c-1'` → I2C not enabled; run
+  `sudo raspi-config nonint do_i2c 0 && sudo reboot`.
+- `[Errno 121] Remote I/O error` / wrong values → wrong address; check
+  `i2cdetect -y 1` and set `UPS_I2C_ADDR`.
+- `[Errno 13] Permission denied` → add the service user to the group:
+  `sudo usermod -aG i2c $USER` then reboot.
+- Restart after changes: `sudo systemctl restart rpi-wifi-led`.
 
 ---
 

@@ -16,7 +16,9 @@ Wiring (per LED): long leg (+) → 330Ω resistor → its GPIO pin; short leg (�
 GPIO18 supports hardware PWM; the others use lgpio's PWM, which is fine for LEDs.
 """
 import os
+import json
 import threading
+import urllib.request
 from flask import Flask, jsonify, request, Response
 
 try:
@@ -196,6 +198,11 @@ PAGE = """<!doctype html>
     <div class="stat"><div class="k">Temp</div><div class="v" id="s-temp">–</div></div>
     <div class="stat"><div class="k">Battery</div><div class="v" id="s-batt">–</div></div>
   </div>
+  <div class="dash">
+    <div class="stat"><div class="k">HLS</div><div class="v" id="s-hls">–</div></div>
+    <div class="stat"><div class="k">WebRTC</div><div class="v" id="s-webrtc">–</div></div>
+    <div class="stat"><div class="k">RTSP</div><div class="v" id="s-rtsp">–</div></div>
+  </div>
   <div class="master">
     <strong>All lights</strong>
     <div class="row">
@@ -351,13 +358,24 @@ async function pollStats() {
   setStat('s-temp', s.temp_c == null ? '–' : s.temp_c + '°C',
           s.temp_c >= 80 ? 'crit' : s.temp_c >= 70 ? 'warn' : '');
   const b = s.battery || {};
+  const battEl = document.getElementById('s-batt');
   if (b.present) {
     setStat('s-batt', `${b.percent}%${b.charging ? ' ⚡' : ''} · ${b.voltage}V`,
             (!b.charging && b.percent <= 15) ? 'crit'
               : (!b.charging && b.percent <= 30) ? 'warn' : '');
+    battEl.title = `${b.voltage} V, ${b.current_ma} mA`;
   } else {
     setStat('s-batt', 'n/a');
+    battEl.title = b.reason || '';   // hover shows why (e.g. I2C off, no HAT)
   }
+  // Per-protocol stream fps + viewer counts (same encoded stream on all three).
+  const st = s.stream || {};
+  const label = (n) => !st.publishing ? '–'
+    : (st.fps != null ? st.fps + ' fps' : 'live') + (n ? ` · ${n}▸` : '');
+  const p = st.protocols || {};
+  setStat('s-hls', label(p.hls));
+  setStat('s-webrtc', label(p.webrtc));
+  setStat('s-rtsp', label(p.rtsp));
 }
 setInterval(pollStats, 2000);
 pollStats();
@@ -419,6 +437,44 @@ def cpu_temp():
         return None
 
 
+# Camera-publish writes the chosen mode here; MediaMTX's local API reports readers.
+CAM_INFO = os.environ.get("CAM_INFO", "/dev/shm/rpi-cam-info")
+MTX_API = os.environ.get("MTX_API", "http://127.0.0.1:9997")
+
+
+def stream_stats():
+    """Published fps + per-protocol viewer counts, from metadata only (no probing
+    of the stream itself, so it doesn't affect video)."""
+    info = {}
+    try:
+        with open(CAM_INFO) as f:
+            info = json.load(f)
+    except Exception:
+        pass
+    out = {
+        "publishing": False,
+        "fps": info.get("fps"),
+        "size": info.get("size"),
+        "codec": info.get("codec"),
+        "protocols": {"hls": 0, "webrtc": 0, "rtsp": 0},
+    }
+    try:
+        with urllib.request.urlopen(MTX_API + "/v3/paths/get/cam", timeout=0.5) as r:
+            data = json.load(r)
+        out["publishing"] = bool(data.get("ready"))
+        for reader in data.get("readers", []):
+            t = reader.get("type", "")
+            if t == "hlsMuxer":
+                out["protocols"]["hls"] += 1
+            elif t == "webRTCSession":
+                out["protocols"]["webrtc"] += 1
+            elif t in ("rtspSession", "rtspsSession"):
+                out["protocols"]["rtsp"] += 1
+    except Exception:
+        pass  # MediaMTX API off/unreachable — leave publishing False
+    return out
+
+
 @app.route("/stats")
 def stats():
     battery = ups.read() if ups else {"present": False, "reason": "module missing"}
@@ -426,6 +482,7 @@ def stats():
         "cpu_percent": cpu_percent(),
         "temp_c": cpu_temp(),
         "battery": battery,
+        "stream": stream_stats(),
     })
 
 
