@@ -50,16 +50,25 @@ def read():
     """Return a battery dict, or {'present': False, 'reason': ...} if unreadable."""
     if SMBus is None:
         return {"present": False, "reason": "smbus not installed"}
+    # NB: open/close manually — the classic python3-smbus SMBus has no context
+    # manager (`with` support), unlike smbus2, so we don't rely on it.
+    bus = None
     try:
-        with SMBus(I2C_BUS) as bus:
-            # Calibrate for the Waveshare 32V/2A range (current LSB ~0.1 mA).
-            # Bus voltage itself doesn't depend on this; current does.
-            bus.write_i2c_block_data(I2C_ADDR, _REG_CALIBRATION, [0x10, 0x00])
-            raw_bus = _read_word(bus, _REG_BUSVOLTAGE)
-            voltage = (raw_bus >> 3) * 0.004  # 4 mV/LSB
-            current_ma = _signed(_read_word(bus, _REG_CURRENT)) * 0.1 * CURRENT_SIGN
+        bus = SMBus(I2C_BUS)
+        # Calibrate for the Waveshare 32V/2A range (current LSB ~0.1 mA).
+        # Bus voltage itself doesn't depend on this; current does.
+        bus.write_i2c_block_data(I2C_ADDR, _REG_CALIBRATION, [0x10, 0x00])
+        raw_bus = _read_word(bus, _REG_BUSVOLTAGE)
+        voltage = (raw_bus >> 3) * 0.004  # 4 mV/LSB
+        current_ma = _signed(_read_word(bus, _REG_CURRENT)) * 0.1 * CURRENT_SIGN
     except Exception as exc:  # I2C off, no HAT, wrong address, etc.
         return {"present": False, "reason": str(exc)}
+    finally:
+        if bus is not None:
+            try:
+                bus.close()
+            except Exception:
+                pass
 
     pct = (voltage - V_EMPTY) / (V_FULL - V_EMPTY) * 100.0
     pct = max(0.0, min(100.0, pct))

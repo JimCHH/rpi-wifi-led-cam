@@ -4,6 +4,10 @@
 
 logLevel: info
 
+# --- Local API: lets the LED dashboard read per-protocol viewer counts ---
+api: yes
+apiAddress: 127.0.0.1:9997
+
 # --- RTSP: ingest from ffmpeg + playback in VLC/apps ---
 rtsp: yes
 rtspAddress: :8554
