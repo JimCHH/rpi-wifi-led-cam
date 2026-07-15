@@ -331,6 +331,26 @@ hotspot is live so it doesn't drop connected clients.
 > only need a **shared local network**, not the internet. To reach it remotely
 > over the internet you'd add a VPN/tunnel such as Tailscale — out of scope here.
 
+### WiFi setup page (onboard a network from your browser)
+
+Instead of SSHing in to run `add-wifi.sh`, you can save networks from a web page —
+ideal in **hotspot mode**: connect to the Pi's hotspot, open the page, and enter
+the local WiFi's SSID + password for the Pi to join later.
+
+```bash
+./install-portal.sh                 # serves on port 8080 (override PORTAL_PORT)
+```
+
+Then browse to **`http://<pi>:8080`** (or `http://10.42.0.1:8080` on the hotspot).
+It lists visible/saved networks, and **Save** adds the SSID+password as an
+auto-connect profile — the Pi switches to it on the next auto-hotspot check or
+reboot (or SSH in and `sudo nmcli connection up "wifi-<SSID>"` to switch now).
+
+> It runs on its **own port (8080)**, separate from the LED app (5000). It runs
+> as **root** (to change NetworkManager), so only expose it on your **hotspot /
+> trusted network** — anyone who can reach it can change the Pi's WiFi. Stop it
+> with `sudo systemctl disable --now wifi-portal` when not needed.
+
 ---
 
 ## 9. Camera streaming (MediaMTX)
