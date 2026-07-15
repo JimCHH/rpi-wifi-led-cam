@@ -11,12 +11,28 @@ Needs privileges to change NetworkManager, so install it to run as root (see
 install-portal.sh). Only expose it on a trusted/hotspot network — anyone who can
 reach it can change the Pi's WiFi.
 """
+import hmac
 import os
 import subprocess
 from flask import Flask, request, Response, jsonify
 
 PORT = int(os.environ.get("PORTAL_PORT", "8080"))
+# Shared passphrase gate. If empty, the portal is UNPROTECTED (a warning is
+# printed at startup). Any username works; the password must match.
+PASSWORD = os.environ.get("PORTAL_PASSWORD", "")
 app = Flask(__name__)
+
+
+@app.before_request
+def require_auth():
+    if not PASSWORD:
+        return None  # no gate configured
+    auth = request.authorization
+    if not auth or not hmac.compare_digest(auth.password or "", PASSWORD):
+        return Response(
+            "Authentication required.", 401,
+            {"WWW-Authenticate": 'Basic realm="Pi WiFi Setup"'})
+    return None
 
 
 def run(cmd):
@@ -199,4 +215,7 @@ def delete():
 
 
 if __name__ == "__main__":
+    if not PASSWORD:
+        print("WARNING: PORTAL_PASSWORD is not set — the WiFi portal is UNPROTECTED. "
+              "Set it (e.g. via install-portal.sh) to require a passphrase.")
     app.run(host="0.0.0.0", port=PORT)

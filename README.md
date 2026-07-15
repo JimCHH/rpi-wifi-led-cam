@@ -338,18 +338,22 @@ ideal in **hotspot mode**: connect to the Pi's hotspot, open the page, and enter
 the local WiFi's SSID + password for the Pi to join later.
 
 ```bash
-./install-portal.sh                 # serves on port 8080 (override PORTAL_PORT)
+./install-portal.sh                 # prompts for a passphrase; port 8080
+# non-interactive: PORTAL_PASSWORD=secret PORTAL_PORT=8080 ./install-portal.sh
 ```
 
-Then browse to **`http://<pi>:8080`** (or `http://10.42.0.1:8080` on the hotspot).
-It lists visible/saved networks, and **Save** adds the SSID+password as an
-auto-connect profile — the Pi switches to it on the next auto-hotspot check or
-reboot (or SSH in and `sudo nmcli connection up "wifi-<SSID>"` to switch now).
+Then browse to **`http://<pi>:8080`** (or `http://10.42.0.1:8080` on the hotspot)
+and log in with **any username + your passphrase**. It lists visible/saved
+networks, and **Save** adds the SSID+password as an auto-connect profile — the
+Pi switches to it on the next auto-hotspot check or reboot (or SSH in and
+`sudo nmcli connection up "wifi-<SSID>"` to switch now).
 
-> It runs on its **own port (8080)**, separate from the LED app (5000). It runs
-> as **root** (to change NetworkManager), so only expose it on your **hotspot /
-> trusted network** — anyone who can reach it can change the Pi's WiFi. Stop it
-> with `sudo systemctl disable --now wifi-portal` when not needed.
+> It runs on its **own port (8080)**, separate from the LED app (5000), and as
+> **root** (to change NetworkManager). It's gated by a shared passphrase
+> (`PORTAL_PASSWORD`, stored root-only in `/etc/rpi-wifi-portal.env`), but still
+> prefer to expose it only on your **hotspot / trusted network**. Change the
+> passphrase by editing that file + `sudo systemctl restart wifi-portal`; stop
+> the portal with `sudo systemctl disable --now wifi-portal`.
 
 ---
 
