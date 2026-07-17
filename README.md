@@ -444,7 +444,14 @@ sudo systemctl restart camera-stream
 ```
 
 Encoding uses the Pi's **hardware H.264** (`h264_v4l2m2m`) when available, falling
-back to software `libx264`. Useful commands:
+back to software `libx264`. The hardware encoder is picky about some resolutions
+(e.g. **1280×400** can throw `VIDIOC_STREAMON failed`); if the stream won't start,
+force software encoding with **`CAM_ENC=sw`** (higher CPU, but robust):
+
+```bash
+sudo systemctl edit camera-stream     # add: Environment=CAM_ENC=sw
+sudo systemctl restart camera-stream
+``` Useful commands:
 
 ```bash
 systemctl status mediamtx camera-stream   # are they running?
