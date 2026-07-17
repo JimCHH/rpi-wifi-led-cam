@@ -138,7 +138,7 @@ if [ "${HW_PIPE:-0}" = 1 ]; then
     -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
     "${VENC[@]}" -f h264 - \
   | ffmpeg -hide_banner -loglevel warning \
-    -fflags +genpts -r "$FPS" -f h264 -i - \
+    -use_wallclock_as_timestamps 1 -f h264 -i - \
     -c:v copy -f rtsp -rtsp_transport tcp "$RTSP"
 else
   exec ffmpeg -hide_banner -loglevel warning -nostdin \
