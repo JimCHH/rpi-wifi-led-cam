@@ -81,8 +81,30 @@ choose_fps() {
 }
 FPS="$(choose_fps)"
 
-# Decide the encode strategy.
+# Will we re-encode, or stream-copy? (copy = camera-native H.264, or MJPEG
+# passthrough). Transcoding goes through the Pi's H.264 encoder, which has a
+# hard throughput ceiling; copy does not.
 MODE="${CAM_MODE:-transcode}"
+if [ "$CODEC" = h264 ] || { [ "$CODEC" = mjpeg ] && [ "$MODE" = copy ]; }; then
+  TRANSCODE=0
+else
+  TRANSCODE=1
+fi
+
+# The camera's max advertised fps (e.g. 210) can far exceed what the Pi can
+# *transcode* — feeding that to the H.264 encoder makes VIDIOC_STREAMON fail.
+# So cap the transcode path to a stable rate. Passthrough/copy is never capped
+# (it doesn't re-encode). Force any rate with CAM_FPS; raise the cap with
+# CAM_FPS_MAX.
+if [ "$TRANSCODE" = 1 ] && [ -z "${CAM_FPS:-}" ]; then
+  FPS_MAX="${CAM_FPS_MAX:-30}"
+  if [ "$FPS" -gt "$FPS_MAX" ]; then
+    echo "camera-publish: capping transcode fps ${FPS} -> ${FPS_MAX} (encoder limit; CAM_FPS/CAM_FPS_MAX to override)"
+    FPS="$FPS_MAX"
+  fi
+fi
+
+# Decide the encode strategy (build VENC with the possibly-capped FPS).
 if [ "$CODEC" = h264 ]; then
   STRATEGY="copy (H.264 passthrough — no Pi transcode)"
   VENC=(-c:v copy)
