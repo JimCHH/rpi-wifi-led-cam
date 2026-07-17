@@ -138,7 +138,9 @@ if [ "$AUDIO" != "off" ] && [ -z "$ADEV" ]; then
 fi
 
 if [ "$AUDIO" = "off" ] || [ -z "$ADEV" ]; then
-  AUDIO_IN=(); MAP=(-map 0:v:0); AENC=(-an); ASTATE="off"
+  # No audio: keep the ffmpeg command byte-for-byte like the pre-audio version
+  # (no -map / -an). Adding those flags broke the h264_v4l2m2m encoder path.
+  AUDIO_IN=(); MAP=(); AENC=(); ASTATE="off"
   echo "camera-publish: audio off (no capture device / CAM_AUDIO=off)"
 else
   AUDIO_IN=(-f alsa -thread_queue_size 1024 -i "$ADEV")
