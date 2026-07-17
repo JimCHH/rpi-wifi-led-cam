@@ -429,10 +429,13 @@ sudo systemctl edit camera-stream      # add, e.g.:
 sudo systemctl restart camera-stream
 ```
 
-Encoding uses the Pi's **hardware H.264** (`h264_v4l2m2m`) when available, falling
-back to software `libx264`. The hardware encoder is picky about some resolutions
-(e.g. **1280×400** can throw `VIDIOC_STREAMON failed`); if the stream won't start,
-force software encoding with **`CAM_ENC=sw`** (higher CPU, but robust):
+Encoding uses the Pi's **hardware H.264** (`h264_v4l2m2m`) by default — low CPU,
+so it comfortably does higher frame rates (e.g. 60 fps at 1280×400). The Pi's
+hardware encoder emits non-monotonic timestamps that break the RTSP muxer, so
+`camera-publish.sh` runs a **two-stage pipeline**: it hardware-encodes to a raw
+H.264 stream, then re-timestamps it on copy into RTSP (the copy stage is nearly
+free). If you ever hit an encoder issue, fall back to software `libx264` with
+**`CAM_ENC=sw`** (robust, but much higher CPU → ~30 fps max at 1280×400):
 
 ```bash
 sudo systemctl edit camera-stream     # add: Environment=CAM_ENC=sw
