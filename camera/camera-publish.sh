@@ -122,45 +122,13 @@ else
   VENC=(-c:v libx264 -preset ultrafast -tune zerolatency -b:v "$BITRATE" -pix_fmt yuv420p -g "$FPS")
 fi
 
-# --- Audio (microphone) ------------------------------------------------------
-# CAM_AUDIO=auto|on|off (default auto: on if a capture device is found).
-# CAM_ACODEC=aac (RTSP/HLS) | opus (also plays on the WebRTC player).
-# CAM_ADEV overrides the ALSA device (e.g. plughw:1); else auto-detected.
-AUDIO="${CAM_AUDIO:-auto}"
-ACODEC="${CAM_ACODEC:-aac}"
-ABITRATE="${CAM_ABITRATE:-128k}"
-ADEV="${CAM_ADEV:-}"
-
-if [ "$AUDIO" != "off" ] && [ -z "$ADEV" ]; then
-  # arecord -l lists capture cards; take the first (usually the USB cam's mic).
-  CARD="$(arecord -l 2>/dev/null | grep -oE '^card [0-9]+' | head -1 | grep -oE '[0-9]+')"
-  [ -n "$CARD" ] && ADEV="plughw:${CARD}"
-fi
-
-if [ "$AUDIO" = "off" ] || [ -z "$ADEV" ]; then
-  # No audio: keep the ffmpeg command byte-for-byte like the pre-audio version
-  # (no -map / -an). Adding those flags broke the h264_v4l2m2m encoder path.
-  AUDIO_IN=(); MAP=(); AENC=(); ASTATE="off"
-  echo "camera-publish: audio off (no capture device / CAM_AUDIO=off)"
-else
-  AUDIO_IN=(-f alsa -thread_queue_size 1024 -i "$ADEV")
-  MAP=(-map 0:v:0 -map 1:a:0)
-  case "$ACODEC" in
-    opus) AENC=(-c:a libopus -b:a "$ABITRATE") ;;
-    *)    AENC=(-c:a aac -b:a "$ABITRATE"); ACODEC="aac" ;;
-  esac
-  ASTATE="$ACODEC@$ADEV"
-  echo "camera-publish: audio $ADEV -> $ACODEC @ $ABITRATE"
-fi
-
-echo "camera-publish: STREAMING ${SIZE} @ ${FPS}fps  codec=${CODEC}  audio=${ASTATE}  ${STRATEGY}  ->  $RTSP"
+echo "camera-publish: STREAMING ${SIZE} @ ${FPS}fps  codec=${CODEC}  ${STRATEGY}  ->  $RTSP"
 
 # Record the chosen mode so the LED dashboard can show the stream's fps/size.
-printf '{"size":"%s","fps":%s,"codec":"%s","audio":"%s"}\n' "$SIZE" "$FPS" "$CODEC" "$ASTATE" \
+printf '{"size":"%s","fps":%s,"codec":"%s"}\n' "$SIZE" "$FPS" "$CODEC" \
   > "${CAM_INFO:-/dev/shm/rpi-cam-info}" 2>/dev/null || true
 
 exec ffmpeg -hide_banner -loglevel warning -nostdin \
   -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
-  "${AUDIO_IN[@]}" \
-  "${MAP[@]}" "${VENC[@]}" "${AENC[@]}" \
+  "${VENC[@]}" \
   -f rtsp -rtsp_transport tcp "$RTSP"
