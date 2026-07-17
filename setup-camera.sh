@@ -10,9 +10,9 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "==> Installing ffmpeg + v4l-utils…"
+echo "==> Installing ffmpeg + v4l-utils + alsa-utils…"
 sudo apt update
-sudo apt install -y ffmpeg v4l-utils curl tar
+sudo apt install -y ffmpeg v4l-utils alsa-utils curl tar
 
 echo "==> Detecting CPU architecture for MediaMTX…"
 case "$(uname -m)" in

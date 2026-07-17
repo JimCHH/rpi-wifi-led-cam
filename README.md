@@ -408,6 +408,26 @@ camera-publish: STREAMING 1280x480 @ 60fps  codec=h264  copy (H.264 passthrough 
 Force any of it with `CAM_SIZE`, `CAM_FPS`, `CAM_CODEC` (`h264`/`mjpeg`/`yuyv`),
 `CAM_MODE`, `CAM_BITRATE`.
 
+**Audio (microphone).** If the camera (or a USB mic) exposes an ALSA capture
+device, it's captured and muxed into the stream automatically. Controls:
+
+- `CAM_AUDIO=auto|on|off` — default `auto` (on when a mic is found).
+- `CAM_ACODEC=aac|opus` — **AAC** (default) plays on **RTSP + HLS**; use **Opus**
+  if you also want sound on the **WebRTC** player (WebRTC can't play AAC, and
+  MediaMTX doesn't transcode).
+- `CAM_ADEV` — force the ALSA device (e.g. `plughw:1`); else auto-detected from
+  `arecord -l`. `CAM_ABITRATE` sets the audio rate (default `128k`).
+
+```bash
+sudo systemctl edit camera-stream     # e.g. sound on all three players:
+# [Service]
+# Environment=CAM_ACODEC=opus
+sudo systemctl restart camera-stream
+```
+
+The service log shows the audio state, e.g. `audio=aac@plughw:1` (or `audio=off`).
+Confirm the mic with `arecord -l`.
+
 Override per the `camera-stream.service` (or export before running the script):
 
 ```bash
