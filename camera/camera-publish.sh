@@ -111,7 +111,10 @@ if [ "$CODEC" = h264 ]; then
 elif [ "$CODEC" = mjpeg ] && [ "$MODE" = copy ]; then
   STRATEGY="copy (MJPEG passthrough — RTSP only, not HLS/WebRTC)"
   VENC=(-c:v copy)
-elif ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_v4l2m2m; then
+elif [ "${CAM_ENC:-hw}" != "sw" ] && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_v4l2m2m; then
+  # Hardware encoder. Fast/low-CPU, but the Pi's h264_v4l2m2m is picky about some
+  # resolutions (e.g. 1280x400 -> VIDIOC_STREAMON failed). If it fails, set
+  # CAM_ENC=sw to use software libx264 instead.
   STRATEGY="transcode -> H.264 (hardware)"
   VENC=(-c:v h264_v4l2m2m -b:v "$BITRATE" -pix_fmt yuv420p -g "$FPS")
 else
