@@ -398,6 +398,11 @@ advertises** for that size, and a codec strategy tuned for **max stable fps**:
   through untouched (higher fps, but RTSP-only — not HLS/WebRTC).
 - **YUYV only** → transcode; limited by USB2 bandwidth.
 
+> **Transcode fps is capped** (default 30, `CAM_FPS_MAX`) because the Pi's H.264
+> encoder can't keep up with a camera's max advertised rate (e.g. 210 fps →
+> `VIDIOC_STREAMON failed`). Only the **passthrough** path (camera-native H.264)
+> runs uncapped, since it doesn't re-encode. Force any rate with `CAM_FPS`.
+
 The service log shows what it chose:
 
 ```
