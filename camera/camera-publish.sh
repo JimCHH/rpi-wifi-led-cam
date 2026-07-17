@@ -112,11 +112,12 @@ elif [ "$CODEC" = mjpeg ] && [ "$MODE" = copy ]; then
   STRATEGY="copy (MJPEG passthrough — RTSP only, not HLS/WebRTC)"
   VENC=(-c:v copy)
 elif [ "${CAM_ENC:-hw}" != "sw" ] && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_v4l2m2m; then
-  # Hardware encoder. Fast/low-CPU, but the Pi's h264_v4l2m2m is picky about some
-  # resolutions (e.g. 1280x400 -> VIDIOC_STREAMON failed). If it fails, set
-  # CAM_ENC=sw to use software libx264 instead.
-  STRATEGY="transcode -> H.264 (hardware)"
+  # Hardware encoder (low CPU). The Pi's h264_v4l2m2m emits non-monotonic DTS
+  # that the RTSP muxer rejects, so we output a raw H.264 elementary stream
+  # (no timestamps) and re-timestamp it in a 2nd ffmpeg (HW_PIPE below).
+  STRATEGY="transcode -> H.264 (hardware, re-timestamped)"
   VENC=(-c:v h264_v4l2m2m -b:v "$BITRATE" -pix_fmt yuv420p -g "$FPS")
+  HW_PIPE=1
 else
   STRATEGY="transcode -> H.264 (software libx264)"
   VENC=(-c:v libx264 -preset ultrafast -tune zerolatency -b:v "$BITRATE" -pix_fmt yuv420p -g "$FPS")
@@ -128,7 +129,20 @@ echo "camera-publish: STREAMING ${SIZE} @ ${FPS}fps  codec=${CODEC}  ${STRATEGY}
 printf '{"size":"%s","fps":%s,"codec":"%s"}\n' "$SIZE" "$FPS" "$CODEC" \
   > "${CAM_INFO:-/dev/shm/rpi-cam-info}" 2>/dev/null || true
 
-exec ffmpeg -hide_banner -loglevel warning -nostdin \
-  -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
-  "${VENC[@]}" \
-  -f rtsp -rtsp_transport tcp "$RTSP"
+if [ "${HW_PIPE:-0}" = 1 ]; then
+  # Stage 1: capture + hardware-encode to a raw H.264 stream (no container, so
+  # the encoder's bad timestamps are dropped). Stage 2: assign fresh monotonic
+  # timestamps at $FPS and copy (no re-encode) into RTSP. systemd's cgroup kill
+  # stops both; `pipefail` (set above) surfaces either stage's failure.
+  ffmpeg -hide_banner -loglevel warning -nostdin \
+    -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
+    "${VENC[@]}" -f h264 - \
+  | ffmpeg -hide_banner -loglevel warning \
+    -fflags +genpts -r "$FPS" -f h264 -i - \
+    -c:v copy -f rtsp -rtsp_transport tcp "$RTSP"
+else
+  exec ffmpeg -hide_banner -loglevel warning -nostdin \
+    -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
+    "${VENC[@]}" \
+    -f rtsp -rtsp_transport tcp "$RTSP"
+fi
