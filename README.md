@@ -368,6 +368,12 @@ cd ~/rpi-wifi-led
 ./setup-camera.sh
 ```
 
+The services run `camera-publish.sh` and `mediamtx.yml` **directly from the repo**,
+so to apply an update just `git pull && sudo systemctl restart camera-stream mediamtx`.
+(If you set this up before that change and edits aren't taking effect, re-run
+`./setup-camera.sh` once — older installs ran a *copy* in `/usr/local/bin` that
+`git pull` didn't touch.)
+
 This installs MediaMTX + ffmpeg and two services:
 
 - **`mediamtx`** — the media server (RTSP/HLS/WebRTC).

@@ -38,20 +38,19 @@ else
   echo "==> MediaMTX already installed ($(command -v mediamtx))."
 fi
 
-echo "==> Installing config + publisher script…"
-sudo mkdir -p /usr/local/etc
-sudo cp "$REPO_DIR/camera/mediamtx.yml" /usr/local/etc/mediamtx.yml
-sudo cp "$REPO_DIR/camera/camera-publish.sh" /usr/local/bin/camera-publish.sh
-sudo chmod +x /usr/local/bin/camera-publish.sh
+echo "==> Making the repo scripts executable (services run them IN PLACE)…"
+# Run the config + publisher straight from the repo so a plain `git pull`
+# (+ restart) applies updates — no stale /usr/local copies to forget about.
+chmod +x "$REPO_DIR/camera/camera-publish.sh"
 
 echo "==> Installing systemd services…"
-sudo tee /etc/systemd/system/mediamtx.service >/dev/null <<'EOF'
+sudo tee /etc/systemd/system/mediamtx.service >/dev/null <<EOF
 [Unit]
 Description=MediaMTX media server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/mediamtx /usr/local/etc/mediamtx.yml
+ExecStart=/usr/local/bin/mediamtx $REPO_DIR/camera/mediamtx.yml
 Restart=on-failure
 RestartSec=3
 
@@ -59,14 +58,14 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-sudo tee /etc/systemd/system/camera-stream.service >/dev/null <<'EOF'
+sudo tee /etc/systemd/system/camera-stream.service >/dev/null <<EOF
 [Unit]
 Description=Publish the camera to MediaMTX whenever it is connected
 After=mediamtx.service
 Wants=mediamtx.service
 
 [Service]
-ExecStart=/usr/local/bin/camera-publish.sh
+ExecStart=$REPO_DIR/camera/camera-publish.sh
 Restart=always
 RestartSec=3
 # Optional overrides:
@@ -79,7 +78,9 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now mediamtx.service camera-stream.service
+sudo systemctl enable mediamtx.service camera-stream.service
+# restart (not just start) so re-running this after a git pull applies changes
+sudo systemctl restart mediamtx.service camera-stream.service
 
 IP="$(hostname -I | awk '{print $1}')"
 echo
