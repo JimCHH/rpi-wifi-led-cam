@@ -521,7 +521,7 @@ _gauge = {
     "capacity_mah": float(os.environ.get("UPS_CAPACITY_MAH", "1000")),
     "charge_mah": None,      # None until seeded from voltage
     "percent": None, "voltage": None, "current_ma": None,
-    "charging": False, "present": False,
+    "charging": False, "present": False, "reason": None,
 }
 _gauge_lock = threading.Lock()
 
@@ -567,6 +567,7 @@ def _gauge_loop():
         with _gauge_lock:
             if not b.get("present"):
                 _gauge["present"] = False
+                _gauge["reason"] = b.get("reason")
                 continue
             v, i, cap = b["voltage"], b["current_ma"], _gauge["capacity_mah"]
             if _gauge["charge_mah"] is None:      # seed from voltage on first read
@@ -586,9 +587,12 @@ def _gauge_loop():
 
 
 def battery_payload():
+    # Returns the gauge's cached state only — never touches I2C here, so the
+    # background sampler is the *sole* bus reader (concurrent I2C reads collide).
     with _gauge_lock:
         if not _gauge["present"]:
-            return ups.read() if ups else {"present": False, "reason": "module missing"}
+            reason = _gauge["reason"] or ("module missing" if ups is None else "initializing")
+            return {"present": False, "reason": reason}
         return {"present": True, "percent": _gauge["percent"],
                 "voltage": _gauge["voltage"], "current_ma": _gauge["current_ma"],
                 "charging": _gauge["charging"], "capacity_mah": _gauge["capacity_mah"],
