@@ -17,7 +17,9 @@ GPIO18 supports hardware PWM; the others use lgpio's PWM, which is fine for LEDs
 """
 import os
 import json
+import subprocess
 import threading
+import time
 import urllib.request
 from flask import Flask, jsonify, request, Response
 
@@ -203,6 +205,12 @@ PAGE = """<!doctype html>
     <div class="stat"><div class="k">WebRTC</div><div class="v" id="s-webrtc">–</div></div>
     <div class="stat"><div class="k">RTSP</div><div class="v" id="s-rtsp">–</div></div>
   </div>
+  <div class="row" style="font-size:.85rem; opacity:.85">
+    Battery capacity:
+    <input id="cap-mah" type="number" min="50" step="50" style="width:72px">
+    mAh <button id="cap-set" class="ghost">Set</button>
+    <span id="cap-msg"></span>
+  </div>
   <div class="master">
     <strong>All lights</strong>
     <div class="row">
@@ -229,6 +237,8 @@ PAGE = """<!doctype html>
   <div class="lights" id="lights"></div>
   <div class="camera">
     <button id="camtoggle">📹 Show camera</button>
+    <button id="cam-pause" class="ghost">⏸ Pause</button>
+    <button id="cam-resume" class="ghost">▶ Resume</button>
     <div id="camwrap"><iframe id="camframe" allow="autoplay; fullscreen"></iframe></div>
     <p><a id="camlink" target="_blank" rel="noopener">Open stream in new tab ↗</a></p>
   </div>
@@ -250,6 +260,28 @@ camtoggle.onclick = () => {
     camwrap.style.display = 'block';
     camtoggle.textContent = '📹 Hide camera';
   }
+};
+
+// Camera pause/resume via API (stops/starts the camera-stream service).
+async function camCtl(action) {
+  const r = await fetch('/camera/' + action, {method: 'POST'});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) alert('Camera ' + action + ' failed: ' + (j.error || r.status));
+}
+document.getElementById('cam-pause').onclick = () => camCtl('pause');
+document.getElementById('cam-resume').onclick = () => camCtl('resume');
+
+// Battery capacity setting.
+const capInput = document.getElementById('cap-mah');
+document.getElementById('cap-set').onclick = async () => {
+  const v = parseFloat(capInput.value);
+  const msg = document.getElementById('cap-msg');
+  const r = await fetch('/battery/config', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({capacity_mah: v})
+  });
+  msg.textContent = r.ok ? ' ✓' : ' ✗';
+  setTimeout(() => { msg.textContent = ''; }, 1500);
 };
 
 const container = document.getElementById('lights');
@@ -363,7 +395,10 @@ async function pollStats() {
     setStat('s-batt', `${b.percent}%${b.charging ? ' ⚡' : ''} · ${b.voltage}V`,
             (!b.charging && b.percent <= 15) ? 'crit'
               : (!b.charging && b.percent <= 30) ? 'warn' : '');
-    battEl.title = `${b.voltage} V, ${b.current_ma} mA`;
+    battEl.title = `${b.voltage} V, ${b.current_ma} mA (coulomb-counted)`;
+    // reflect capacity in the input, but don't clobber it while editing:
+    if (b.capacity_mah != null && document.activeElement !== capInput)
+      capInput.value = b.capacity_mah;
   } else {
     setStat('s-batt', 'n/a');
     battEl.title = b.reason || '';   // hover shows why (e.g. I2C off, no HAT)
@@ -475,9 +510,129 @@ def stream_stats():
     return out
 
 
+# --- Battery fuel gauge: software coulomb counting + voltage anchoring --------
+# The INA219 only measures volts/amps, so a raw voltage % jumps around under
+# charge/load. We integrate current over time (coulomb counting) for a stable,
+# "phone-like" reading, and anchor it to 100% at full charge and to the resting
+# voltage when idle (to correct drift). State persists across restarts.
+GAUGE_STATE = os.environ.get(
+    "UPS_STATE_FILE", os.path.expanduser("~/.rpi-wifi-led-fuelgauge.json"))
+_gauge = {
+    "capacity_mah": float(os.environ.get("UPS_CAPACITY_MAH", "1000")),
+    "charge_mah": None,      # None until seeded from voltage
+    "percent": None, "voltage": None, "current_ma": None,
+    "charging": False, "present": False,
+}
+_gauge_lock = threading.Lock()
+
+
+def _v_soc(v):
+    """Resting-voltage -> state-of-charge fraction (0..1), single Li-ion cell."""
+    lo = float(os.environ.get("UPS_V_EMPTY", "3.0"))
+    hi = float(os.environ.get("UPS_V_FULL", "4.2"))
+    return max(0.0, min(1.0, (v - lo) / (hi - lo)))
+
+
+def _gauge_load():
+    try:
+        with open(GAUGE_STATE) as f:
+            d = json.load(f)
+        _gauge["capacity_mah"] = float(d.get("capacity_mah", _gauge["capacity_mah"]))
+        _gauge["charge_mah"] = d.get("charge_mah")
+    except Exception:
+        pass
+
+
+def _gauge_save():
+    try:
+        with open(GAUGE_STATE, "w") as f:
+            json.dump({"capacity_mah": _gauge["capacity_mah"],
+                       "charge_mah": _gauge["charge_mah"]}, f)
+    except Exception:
+        pass
+
+
+def _gauge_loop():
+    """Background sampler: integrate current every ~2 s and anchor."""
+    last = time.monotonic()
+    last_save = 0.0
+    while True:
+        time.sleep(2)
+        if ups is None:
+            continue
+        b = ups.read()
+        now = time.monotonic()
+        dt = min(now - last, 10.0)   # bound dt so a stall can't cause a huge jump
+        last = now
+        with _gauge_lock:
+            if not b.get("present"):
+                _gauge["present"] = False
+                continue
+            v, i, cap = b["voltage"], b["current_ma"], _gauge["capacity_mah"]
+            if _gauge["charge_mah"] is None:      # seed from voltage on first read
+                _gauge["charge_mah"] = _v_soc(v) * cap
+            _gauge["charge_mah"] += i * dt / 3600.0                # coulomb count
+            if v >= 4.15 and i < 60:              # full: high V + tapered current
+                _gauge["charge_mah"] = cap
+            if abs(i) < 60:                       # at rest: blend toward V-estimate
+                _gauge["charge_mah"] += (_v_soc(v) * cap - _gauge["charge_mah"]) * 0.02
+            _gauge["charge_mah"] = max(0.0, min(cap, _gauge["charge_mah"]))
+            _gauge.update(percent=round(_gauge["charge_mah"] / cap * 100),
+                          voltage=v, current_ma=i, charging=i > 20, present=True)
+        if now - last_save > 30:
+            with _gauge_lock:
+                _gauge_save()
+            last_save = now
+
+
+def battery_payload():
+    with _gauge_lock:
+        if not _gauge["present"]:
+            return ups.read() if ups else {"present": False, "reason": "module missing"}
+        return {"present": True, "percent": _gauge["percent"],
+                "voltage": _gauge["voltage"], "current_ma": _gauge["current_ma"],
+                "charging": _gauge["charging"], "capacity_mah": _gauge["capacity_mah"],
+                "method": "coulomb"}
+
+
+@app.route("/battery/config", methods=["POST"])
+def battery_config():
+    data = request.get_json(silent=True) or {}
+    try:
+        cap = float(data.get("capacity_mah"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "capacity_mah must be a number"}), 400
+    if not (50 <= cap <= 100000):
+        return jsonify({"error": "capacity_mah out of range (50–100000)"}), 400
+    with _gauge_lock:
+        old = _gauge["capacity_mah"]
+        if _gauge["charge_mah"] is not None and old > 0:
+            _gauge["charge_mah"] *= cap / old   # keep the same % across the change
+        _gauge["capacity_mah"] = cap
+        _gauge_save()
+    return jsonify({"capacity_mah": cap})
+
+
+# --- Camera stream control (pause/resume the camera-stream service) -----------
+CAMERA_SERVICE = os.environ.get("CAMERA_SERVICE", "camera-stream")
+
+
+@app.route("/camera/<action>", methods=["POST"])
+def camera_control(action):
+    cmd = {"pause": "stop", "resume": "start"}.get(action)
+    if cmd is None:
+        return jsonify({"error": "action must be pause or resume"}), 404
+    r = subprocess.run(["sudo", "-n", "/usr/bin/systemctl", cmd, CAMERA_SERVICE],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return jsonify({"ok": False, "error": r.stderr.strip() or "systemctl failed "
+                        "(needs the sudoers rule from install-service.sh)"}), 500
+    return jsonify({"ok": True, "action": action})
+
+
 @app.route("/stats")
 def stats():
-    battery = ups.read() if ups else {"present": False, "reason": "module missing"}
+    battery = battery_payload()
     return jsonify({
         "cpu_percent": cpu_percent(),
         "temp_c": cpu_temp(),
@@ -615,4 +770,7 @@ if __name__ == "__main__":
     # network (your Mac/PC), not just localhost on the Pi itself.
     for lid in order:
         apply_state(lights[lid])
+    # Start the battery fuel-gauge sampler (runs continuously in the background).
+    _gauge_load()
+    threading.Thread(target=_gauge_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))

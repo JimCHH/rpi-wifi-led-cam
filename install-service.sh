@@ -46,6 +46,17 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now rpi-wifi-led
 
+# --- Let the LED app pause/resume the camera stream (via the web API) ---------
+# Grants ONLY start/stop/restart of camera-stream to this user, no password.
+echo "==> Allowing '$USER_NAME' to pause/resume the camera service…"
+SUDOERS=/etc/sudoers.d/rpi-wifi-led
+sudo tee "$SUDOERS" >/dev/null <<EOF
+$USER_NAME ALL=(root) NOPASSWD: /usr/bin/systemctl start camera-stream, /usr/bin/systemctl stop camera-stream, /usr/bin/systemctl restart camera-stream
+EOF
+sudo chmod 440 "$SUDOERS"
+# Validate; remove the file if it doesn't parse (never leave sudo broken).
+sudo visudo -cf "$SUDOERS" >/dev/null 2>&1 || { echo "   (invalid sudoers, removing)"; sudo rm -f "$SUDOERS"; }
+
 # --- Stability: stop WiFi power-save dropping the link when idle --------------
 echo "==> Disabling WiFi power-save on '$WIFI_CONN'…"
 sudo nmcli connection modify "$WIFI_CONN" 802-11-wireless.powersave 2 || \

@@ -463,7 +463,14 @@ The control page shows a small live dashboard (polled every 2 s) with:
 - **Temp** — SoC temperature in °C (amber ≥70 °C, red ≥80 °C — watch for throttling),
 - **Battery** — from a **Waveshare UPS HAT** (INA219 over I2C): percentage, ⚡ when
   charging, and pack voltage. Shows `n/a` if no HAT / I2C is present (hover the
-  tile to see why).
+  tile to see why). The percentage is **software coulomb-counted** (integrates
+  current over time, anchored to 100% at full charge and to resting voltage when
+  idle) so it's stable instead of jumping around with charge/load voltage. Set
+  your cell's capacity in the **Battery capacity** box (default 1000 mAh,
+  `UPS_CAPACITY_MAH`) — accuracy depends on it. State persists across restarts.
+- **Camera Pause / Resume** buttons stop/start the camera stream (`POST
+  /camera/pause` · `/camera/resume`) — needs the sudoers rule that
+  `install-service.sh` adds.
 - **HLS / WebRTC / RTSP** — the stream's **fps** and live **viewer count** (`▸N`)
   per protocol. All three carry the *same* encoded stream, so the fps is the
   published source rate; they differ in latency/overhead, not frame rate. This is
@@ -523,7 +530,10 @@ light's state, e.g. `{"id": "light1", "name": "Light 1", "pin": 18,
 |--------|-------------------------------|----------------------------|-------------------|
 | GET    | `/`                           | —                          | Control web page  |
 | GET    | `/state`                      | —                          | Array of all lights |
-| GET    | `/stats`                      | —                          | CPU / temp / battery |
+| GET    | `/stats`                      | —                          | CPU / temp / battery / stream |
+| POST   | `/battery/config`             | `{"capacity_mah": 1000}`   | Set battery capacity |
+| POST   | `/camera/pause`               | —                          | Stop the camera stream |
+| POST   | `/camera/resume`              | —                          | Start the camera stream |
 | POST   | `/light/<id>/toggle`          | —                          | Flip on/off       |
 | POST   | `/light/<id>/on`              | —                          | Turn on           |
 | POST   | `/light/<id>/off`             | —                          | Turn off          |
