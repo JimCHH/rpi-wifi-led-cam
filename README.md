@@ -248,6 +248,35 @@ Edit the `User=`/paths in the `.service` file if you didn't clone into
 `/home/pi/rpi-wifi-led`.
 </details>
 
+### Let apps find the Pi without its name (DNS-SD)
+
+`install-service.sh` also announces the Pi on the local network as the DNS-SD
+service **`_nsn-cam._tcp`** (through Avahi), so an app such as NeuroSwift can find
+it with one multicast question — no host name, no IP, and no scan of the network.
+Run it on its own any time with `./setup-mdns.sh`.
+
+The service port is the LED server's port (5000). The TXT record says where the
+camera is and which unit this is:
+
+| Key | Example | Meaning |
+|---|---|---|
+| `txtvers` | `1` | Version of these keys |
+| `product` | `NeuroSwift` | What the Pi is for |
+| `rtsp` | `8554` | Camera RTSP port (`camera/mediamtx.yml`) |
+| `stream` | `cam` | Camera stream name (`camera/mediamtx.yml`) |
+| `hw` | `88:a2:9e:eb:f4:7f` | Hardware address of the WiFi interface |
+
+```bash
+avahi-browse -rt _nsn-cam._tcp          # on the Pi
+dns-sd -B _nsn-cam._tcp local.          # on a Mac
+```
+
+> The announcement only helps an app **find** the Pi. It is not a password or a
+> proof of identity: anyone on the network can announce the same name. NeuroSwift
+> still checks `GET /state` and asks you to confirm the unit by blinking its light
+> before it uses it. Multicast does not cross routers, and some guest or hospital
+> WiFi networks block it; type the address in the app in that case.
+
 ---
 
 ## 7. Powering from a battery
