@@ -266,10 +266,22 @@ camera is and which unit this is:
 | `stream` | `cam` | Camera stream name (`camera/mediamtx.yml`) |
 | `hw` | `88:a2:9e:eb:f4:7f` | Hardware address of the WiFi interface |
 
+Check it from a Mac on the same network:
+
 ```bash
-avahi-browse -rt _nsn-cam._tcp          # on the Pi
-dns-sd -B _nsn-cam._tcp local.          # on a Mac
+dns-sd -B _nsn-cam._tcp local.          # lists the Pi by its host name
 ```
+
+Check it on the Pi, with nothing extra installed:
+
+```bash
+systemctl is-active avahi-daemon        # prints: active
+cat /etc/avahi/services/nsn-cam.service # the record being announced
+```
+
+`avahi-browse -rt _nsn-cam._tcp` shows the same thing from the Pi, but it comes
+with the `avahi-utils` package, which Raspberry Pi OS does not install by default
+(`sudo apt install -y avahi-utils`).
 
 > The announcement only helps an app **find** the Pi. It is not a password or a
 > proof of identity: anyone on the network can announce the same name. NeuroSwift

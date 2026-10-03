@@ -15,8 +15,11 @@
 # Optional overrides:
 #   PORT=5000 RTSP_PORT=8554 STREAM=cam NET_IF=wlan0 ./setup-mdns.sh
 #
-# Check it from the Pi:   avahi-browse -rt _nsn-cam._tcp
 # Check it from a Mac:    dns-sd -B _nsn-cam._tcp local.
+# Check it on the Pi:     systemctl is-active avahi-daemon
+#                         cat /etc/avahi/services/nsn-cam.service
+# (avahi-browse -rt _nsn-cam._tcp also works, but it is in the avahi-utils
+#  package, which Raspberry Pi OS does not install by default.)
 set -euo pipefail
 
 PORT="${PORT:-5000}"
@@ -72,4 +75,9 @@ sudo systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
 # Avahi re-reads /etc/avahi/services on reload; restart if reload is not supported.
 sudo systemctl reload avahi-daemon 2>/dev/null || sudo systemctl restart avahi-daemon
 
-echo "Done. Check with:  avahi-browse -rt _nsn-cam._tcp"
+if [ "$(systemctl is-active avahi-daemon 2>/dev/null)" = "active" ]; then
+  echo "Done. Avahi is running and announcing _nsn-cam._tcp."
+else
+  echo "Done, but avahi-daemon is not active. Check:  systemctl status avahi-daemon"
+fi
+echo "From a Mac on the same network:  dns-sd -B _nsn-cam._tcp local."
