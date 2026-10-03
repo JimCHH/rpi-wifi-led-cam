@@ -85,6 +85,11 @@ if ! locale -a 2>/dev/null | grep -qi 'en_US.utf8'; then
   sudo update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 fi
 
+# --- Let the NeuroSwift app find this Pi without knowing its name or IP --------
+# Announces DNS-SD service _nsn-cam._tcp (see setup-mdns.sh). Never fatal.
+echo "==> Announcing the Pi for NeuroSwift (_nsn-cam._tcp)…"
+PORT=5000 "$REPO_DIR/setup-mdns.sh" || echo "   (announcement not installed; run ./setup-mdns.sh later)"
+
 IP_NOW="$(hostname -I | awk '{print $1}')"
 echo
 echo "Done. Reboot to apply the WiFi power-save change:  sudo reboot"
