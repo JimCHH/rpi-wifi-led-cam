@@ -10,10 +10,13 @@
 #   rtsp=8554            camera RTSP port   (see camera/mediamtx.yml)
 #   stream=cam           camera stream name (see camera/mediamtx.yml)
 #   hw=xx:xx:xx:xx:xx:xx hardware address of the WiFi interface
+#   imu=4001             IMU relay TCP port (only when imu-bridge is installed)
 # The service port is the LED control server's port (PORT, default 5000).
 #
 # Optional overrides:
 #   PORT=5000 RTSP_PORT=8554 STREAM=cam NET_IF=wlan0 ./setup-mdns.sh
+#   IMU_PORT=4001 ./setup-mdns.sh   (setup-imu.sh passes it; when unset, the port
+#                                     is read from an installed imu-bridge.service)
 #
 # Check it from a Mac:    dns-sd -B _nsn-cam._tcp local.
 # Check it on the Pi:     systemctl is-active avahi-daemon
@@ -26,6 +29,13 @@ PORT="${PORT:-5000}"
 RTSP_PORT="${RTSP_PORT:-8554}"
 STREAM="${STREAM:-cam}"
 NET_IF="${NET_IF:-wlan0}"
+# Announce the IMU relay port only when the relay is installed, so re-running
+# this script (e.g. from install-service.sh) keeps the key.
+IMU_UNIT=/etc/systemd/system/imu-bridge.service
+if [ -z "${IMU_PORT:-}" ] && [ -f "$IMU_UNIT" ]; then
+  IMU_PORT="$(sed -n 's/^Environment=IMU_PORT=\([0-9]*\)$/\1/p' "$IMU_UNIT" | head -n1)"
+fi
+IMU_PORT="${IMU_PORT:-}"
 SERVICE_FILE=/etc/avahi/services/nsn-cam.service
 
 # Hardware address of the interface the Pi normally uses; fall back to the first
@@ -50,9 +60,11 @@ esac
 echo "==> Installing Avahi (usually already present on Raspberry Pi OS)…"
 sudo apt install -y avahi-daemon >/dev/null
 
-echo "==> Announcing _nsn-cam._tcp on port $PORT (rtsp=$RTSP_PORT stream=$STREAM${HW:+ hw=$HW})"
+echo "==> Announcing _nsn-cam._tcp on port $PORT (rtsp=$RTSP_PORT stream=$STREAM${HW:+ hw=$HW}${IMU_PORT:+ imu=$IMU_PORT})"
 HW_LINE=""
 [ -n "$HW" ] && HW_LINE="    <txt-record>hw=$HW</txt-record>"
+IMU_LINE=""
+[ -n "$IMU_PORT" ] && IMU_LINE="    <txt-record>imu=$IMU_PORT</txt-record>"
 sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
@@ -67,6 +79,7 @@ sudo tee "$SERVICE_FILE" >/dev/null <<EOF
     <txt-record>rtsp=$RTSP_PORT</txt-record>
     <txt-record>stream=$STREAM</txt-record>
 $HW_LINE
+$IMU_LINE
   </service>
 </service-group>
 EOF

@@ -265,6 +265,7 @@ camera is and which unit this is:
 | `rtsp` | `8554` | Camera RTSP port (`camera/mediamtx.yml`) |
 | `stream` | `cam` | Camera stream name (`camera/mediamtx.yml`) |
 | `hw` | `88:a2:9e:eb:f4:7f` | Hardware address of the WiFi interface |
+| `imu` | `4001` | IMU relay TCP port; present only when the IMU relay is installed (see [§11](#11-usb-imu-over-wifi-for-ns01-2)) |
 
 Check it from a Mac on the same network:
 
@@ -558,6 +559,93 @@ work with no extra hardware.
 - `[Errno 13] Permission denied` → add the service user to the group:
   `sudo usermod -aG i2c $USER` then reboot.
 - Restart after changes: `sudo systemctl restart rpi-wifi-led`.
+
+---
+
+## 11. USB IMU over WiFi (for NS01-2)
+
+The NS01-2 app reads its head-motion sensor (the USB IMU) from a Windows COM
+port. With the IMU plugged into the Pi instead, the Pi sends the sensor's lines
+over WiFi, and a virtual COM port on the PC receives them. The app then reads
+that COM port as it reads the USB IMU, with no change to the app.
+
+```
+USB IMU ──USB──► Pi  imu-bridge  ──WiFi, TCP 4001──► PC  virtual COMx ──► NS01-2 app
+```
+
+**On the Pi.** Plug the IMU into the Pi's **USB** port (the inner one). The Zero 2 W
+has one data port, so to use the IMU and the USB camera together, connect both
+through a small USB hub. USB gadget mode (`setup-usb-gadget.sh`) must be off.
+Then run:
+
+```bash
+cd ~/rpi-wifi-led
+./setup-imu.sh
+```
+
+This installs the **`imu-bridge`** service. It finds the IMU among
+`/dev/serial/by-id/*`, `/dev/ttyACM*` and `/dev/ttyUSB*` by listening for its
+lines, reads it at 115200 baud, and serves the lines on **TCP port 4001**. If the
+IMU is unplugged, the service waits and resumes when it is plugged back in.
+Several PCs may connect at once; each receives every line.
+
+Each line's content is forwarded unchanged: 18 comma-separated numbers (high and low byte
+of the accelerometer, gyroscope and magnetometer axes), sent with a CR LF ending.
+Lines in any other form are not forwarded, because the app would read them as
+all-zero samples.
+
+**On the PC (Windows).** Install a virtual COM port driver that connects a COM
+port to a TCP address, and point it at `<pi address>:4001` as a **TCP client in
+raw mode** (no Telnet or RFC 2217). Two that work this way:
+
+- **HW Virtual Serial Port** (HW group, free): *Create COM*, IP = the Pi, Port = 4001.
+- **com0com + com2tcp** (open source): com0com makes a pair of linked ports
+  (`CNCA0` and `CNCB0`); `com2tcp \\.\CNCB0 <pi address> 4001` connects one
+  end to the Pi, and the app uses the other end (`CNCA0`, or the COM name you
+  give it in the com0com setup).
+
+Baud-rate settings on the virtual port have no effect; the app's 115200 is fine.
+In the app, choose the new COM port, or let it detect the IMU automatically.
+
+**Check the stream** before opening the app:
+
+```bash
+nc <pi address> 4001 | head          # from a Mac/Linux PC: 18 numbers per line
+journalctl -u imu-bridge -f          # on the Pi: device found, clients, lines/s
+```
+
+The log prints the line rate once a minute (about 145 lines/s for the NS01-2 IMU).
+To test without the IMU, run the relay with synthetic data (it says so in the
+log; never use it with a patient):
+
+```bash
+sudo systemctl edit imu-bridge       # add:  [Service]  Environment=IMU_DEV=sim
+sudo systemctl restart imu-bridge
+```
+
+Other settings, as `Environment=` lines in the same way: `IMU_DEV=/dev/ttyACM0`
+(fixed device instead of detection), `IMU_PORT` (TCP port; re-run
+`./setup-imu.sh` with `IMU_PORT=…` so the DNS-SD record matches), `IMU_BAUD`.
+
+> **Timing over WiFi.** The app times each sample by when its line arrives. Over
+> USB, lines arrive about every 7 ms. WiFi delivers them with delays of a few
+> to tens of milliseconds and sometimes several at once. The gyroscope values
+> themselves are unchanged, so head velocity is unaffected. The head angle
+> and head acceleration the app calculates from arrival times are less steady,
+> so the acceleration check during a head impulse (*Too Fast* / *Too Slow*) can
+> misjudge some impulses. Keep the Pi and the PC close to the same access point
+> (or use the Pi's hotspot), and keep WiFi power-save off (`install-service.sh`
+> does this). Compare a WiFi recording with a USB recording before clinical use.
+> Precise timing over WiFi needs the app to read a time stamp sent with each
+> sample; that is an app change, not part of this relay.
+
+Useful commands:
+
+```bash
+systemctl status imu-bridge          # is it running?
+sudo systemctl restart imu-bridge    # after git pull
+sudo systemctl disable --now imu-bridge   # turn it off
+```
 
 ---
 
