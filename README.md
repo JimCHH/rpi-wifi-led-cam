@@ -567,7 +567,8 @@ work with no extra hardware.
 The NS01-2 app reads its head-motion sensor (the USB IMU) from a Windows COM
 port. With the IMU plugged into the Pi instead, the Pi sends the sensor's lines
 over WiFi, and a virtual COM port on the PC receives them. The app then reads
-that COM port as it reads the USB IMU, with no change to the app.
+that COM port as it reads the USB IMU. See the timing note at the end of this
+section before clinical use.
 
 ```
 USB IMU ──USB──► Pi  imu-bridge  ──WiFi, TCP 4001──► PC  virtual COMx ──► NS01-2 app
@@ -596,7 +597,8 @@ all-zero samples.
 
 **On the PC (Windows).** Install a virtual COM port driver that connects a COM
 port to a TCP address, and point it at `<pi address>:4001` as a **TCP client in
-raw mode** (no Telnet or RFC 2217). Two that work this way:
+raw mode** (no Telnet or RFC 2217). Two examples (the Windows side has not
+been tested with the app yet):
 
 - **HW Virtual Serial Port** (HW group, free): *Create COM*, IP = the Pi, Port = 4001.
 - **com0com + com2tcp** (open source): com0com makes a pair of linked ports
@@ -614,7 +616,7 @@ nc <pi address> 4001 | head          # from a Mac/Linux PC: 18 numbers per line
 journalctl -u imu-bridge -f          # on the Pi: device found, clients, lines/s
 ```
 
-The log prints the line rate once a minute (about 145 lines/s for the NS01-2 IMU).
+The log prints the line rate once a minute; it matches the rate the IMU sends.
 To test without the IMU, run the relay with synthetic data (it says so in the
 log; never use it with a patient):
 
@@ -636,8 +638,12 @@ Other settings, as `Environment=` lines in the same way: `IMU_DEV=/dev/ttyACM0`
 > misjudge some impulses. Keep the Pi and the PC close to the same access point
 > (or use the Pi's hotspot), and keep WiFi power-save off (`install-service.sh`
 > does this). Compare a WiFi recording with a USB recording before clinical use.
-> Precise timing over WiFi needs the app to read a time stamp sent with each
-> sample; that is an app change, not part of this relay.
+> The app also reads one line each time the COM port reports new data. When
+> WiFi delivers several lines together, the extra lines wait in the port's
+> buffer, and the head trace can fall behind during a test. The relay sends
+> each line on its own to keep this low, but cannot prevent it. Both points
+> need an app change to fix fully (read every waiting line, and use a time
+> stamp sent with each sample); they are not part of this relay.
 
 Useful commands:
 

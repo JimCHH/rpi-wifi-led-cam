@@ -102,15 +102,10 @@ class Clients:
         dropped = 0
         try:
             while True:
-                data = q.get()
-                # Send everything already queued in one write; each line is
-                # still a complete line.
-                while True:
-                    try:
-                        data += q.get_nowait()
-                    except queue.Empty:
-                        break
-                conn.sendall(data)
+                # One line per write (with TCP_NODELAY, one segment per line):
+                # the app reads one line per serial receive event, so lines
+                # that arrive together wait in its buffer.
+                conn.sendall(q.get())
         except OSError:
             pass
         finally:
