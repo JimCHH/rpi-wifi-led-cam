@@ -58,6 +58,19 @@ sudo systemctl enable imu-bridge.service >/dev/null
 # restart (not just start) so re-running this after a git pull applies changes
 sudo systemctl restart imu-bridge.service
 
+# Bind the IMU to the NS01-2 app the way the camera is bound: the app reads the
+# synchronized output's port from the _nsn-cam._tcp announcement (TXT imu=).
+# setup-mdns.sh picks up /etc/nsn-cam.d/*.txt without knowing about the IMU.
+echo "==> Announcing the IMU to NeuroSwift (imu=$IMU_SYNC_PORT)…"
+sudo mkdir -p /etc/nsn-cam.d
+if [ "$IMU_SYNC_PORT" != 0 ]; then
+  echo "imu=$IMU_SYNC_PORT" | sudo tee /etc/nsn-cam.d/imu.txt >/dev/null
+else
+  sudo rm -f /etc/nsn-cam.d/imu.txt
+fi
+"$REPO_DIR/setup-mdns.sh" >/dev/null \
+  || echo "   (announcement not updated; run ./setup-mdns.sh later)"
+
 IP="$(hostname -I | awk '{print $1}')"
 echo
 echo "Done. The IMU stream is at  tcp://$IP:$IMU_PORT"

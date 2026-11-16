@@ -12,6 +12,10 @@
 #   hw=xx:xx:xx:xx:xx:xx hardware address of the WiFi interface
 # The service port is the LED control server's port (PORT, default 5000).
 #
+# Other features add their own keys without this script knowing them: each
+# non-empty line "key=value" in /etc/nsn-cam.d/*.txt becomes one more TXT record
+# (setup-imu.sh writes imu=<port> there). Re-run this script after changing them.
+#
 # Optional overrides:
 #   PORT=5000 RTSP_PORT=8554 STREAM=cam NET_IF=wlan0 ./setup-mdns.sh
 #
@@ -27,6 +31,7 @@ RTSP_PORT="${RTSP_PORT:-8554}"
 STREAM="${STREAM:-cam}"
 NET_IF="${NET_IF:-wlan0}"
 SERVICE_FILE=/etc/avahi/services/nsn-cam.service
+EXTRA_DIR=/etc/nsn-cam.d
 
 # Hardware address of the interface the Pi normally uses; fall back to the first
 # non-loopback interface if that one is absent (e.g. a wired-only Pi).
@@ -53,6 +58,22 @@ sudo apt install -y avahi-daemon >/dev/null
 echo "==> Announcing _nsn-cam._tcp on port $PORT (rtsp=$RTSP_PORT stream=$STREAM${HW:+ hw=$HW})"
 HW_LINE=""
 [ -n "$HW" ] && HW_LINE="    <txt-record>hw=$HW</txt-record>"
+# Extra keys from other features: key=value, key of letters/digits/-/_, value
+# without spaces or XML characters. Anything else is skipped with a note.
+EXTRA_LINES=""
+for f in "$EXTRA_DIR"/*.txt; do
+  [ -f "$f" ] || continue
+  while IFS= read -r kv || [ -n "$kv" ]; do
+    [ -z "$kv" ] && continue
+    if printf '%s' "$kv" | grep -Eq '^[A-Za-z0-9_-]{1,32}=[A-Za-z0-9._:/-]{0,200}$'; then
+      echo "   + $kv  (from $f)"
+      EXTRA_LINES="${EXTRA_LINES}    <txt-record>${kv}</txt-record>
+"
+    else
+      echo "   (skipped '$kv' in $f: not key=value)"
+    fi
+  done < "$f"
+done
 sudo tee "$SERVICE_FILE" >/dev/null <<EOF
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
@@ -67,7 +88,7 @@ sudo tee "$SERVICE_FILE" >/dev/null <<EOF
     <txt-record>rtsp=$RTSP_PORT</txt-record>
     <txt-record>stream=$STREAM</txt-record>
 $HW_LINE
-  </service>
+${EXTRA_LINES}  </service>
 </service-group>
 EOF
 

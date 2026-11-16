@@ -265,6 +265,11 @@ camera is and which unit this is:
 | `rtsp` | `8554` | Camera RTSP port (`camera/mediamtx.yml`) |
 | `stream` | `cam` | Camera stream name (`camera/mediamtx.yml`) |
 | `hw` | `88:a2:9e:eb:f4:7f` | Hardware address of the WiFi interface |
+| `imu` | `4002` | IMU port (synchronized output); only when the IMU relay is installed ([§11](#11-usb-imu-over-wifi-for-ns01-2)) |
+
+Other features add keys without editing `setup-mdns.sh`: each `key=value` line in
+`/etc/nsn-cam.d/*.txt` becomes one more TXT record the next time `setup-mdns.sh`
+runs (`install-service.sh` runs it too, so the keys survive).
 
 Check it from a Mac on the same network:
 
@@ -565,19 +570,28 @@ work with no extra hardware.
 
 The NS01-2 app reads its head-motion sensor (the USB IMU) from a Windows COM
 port. With the IMU plugged into the Pi instead, the Pi sends the sensor's lines
-over WiFi, and a virtual COM port on the PC receives them. The app then reads
-that COM port as it reads the USB IMU. See the timing note at the end of this
-section before clinical use.
+over WiFi. The app binds the IMU the way it binds the camera and the light:
 
 ```
-USB IMU ──USB──► Pi  imu-bridge ─┬─ WiFi, TCP 4001 ──► PC  virtual COMx ──► NS01-2 app
-                                 └─ WiFi, TCP 4002 ──► receivers that need sample times
+USB IMU ──USB──► Pi  imu-bridge ─┬─ WiFi, TCP 4002 (time-stamped) ──► NS01-2 app (paired headset)
+                                 └─ WiFi, TCP 4001 (as the USB IMU) ─► PC virtual COMx ──► older app builds
 ```
 
-The relay is self-contained: its program and tests are in `imu/`, it is
-installed by `setup-imu.sh`, and it does not change the LED server, the camera
-or the DNS-SD announcement. To remove it:
-`sudo systemctl disable --now imu-bridge && sudo rm /etc/systemd/system/imu-bridge.service`.
+- **NS01-2 app with wireless IMU support (TCP 4002).** The Pi announces the port
+  as `imu=4002` in its `_nsn-cam._tcp` record. When the operator pairs the
+  headset in **Settings**, the app checks that the port answers with the IMU's
+  own header and stores `tcp://<pi>:4002`. That address is then listed first
+  under the exam screen's IMU port, and chosen. The app takes the time between
+  samples from the Pi's clock, so WiFi delays do not enter the head angle or
+  acceleration.
+- **Older app builds (TCP 4001).** A virtual COM port on the PC receives the
+  lines unchanged, and the app reads it as it reads the USB IMU (see *On the
+  PC* below, and the timing note at the end of this section).
+
+The relay is self-contained: its program and tests are in `imu/` and it is
+installed by `setup-imu.sh`. It does not change the LED server or the camera;
+it adds its announcement key through `/etc/nsn-cam.d/imu.txt`. To remove it:
+`sudo systemctl disable --now imu-bridge && sudo rm /etc/systemd/system/imu-bridge.service /etc/nsn-cam.d/imu.txt && ./setup-mdns.sh`.
 
 **On the Pi.** Plug the IMU into the Pi's **USB** port (the inner one). The Zero 2 W
 has one data port, so to use the IMU and the USB camera together, connect both
@@ -600,7 +614,7 @@ of the accelerometer, gyroscope and magnetometer axes), sent with a CR LF ending
 Lines in any other form are not forwarded, because the app would read them as
 all-zero samples.
 
-**On the PC (Windows).** Install a virtual COM port driver that connects a COM
+**On the PC (Windows), only for older app builds.** Install a virtual COM port driver that connects a COM
 port to a TCP address, and point it at `<pi address>:4001` as a **TCP client in
 raw mode** (no Telnet or RFC 2217). Two examples (the Windows side has not
 been tested with the app yet):
@@ -667,10 +681,11 @@ check the IMU's USB serial chip: for an FTDI chip, lower its latency timer
 > streams are stamped. The camera stream (§9) is time-stamped by ffmpeg, and
 > only the hardware-transcode path uses the wall clock
 > (`-use_wallclock_as_timestamps`); whether a receiver can recover the Pi's
-> wall clock from the RTSP stream has not been tested. The NS01-2 app does not
-> read port 4002 yet.
+> wall clock from the RTSP stream has not been tested. The NS01-2 app uses
+> `seq` and `mono_us` for the intervals between samples; it does not yet line
+> IMU samples up with video frames by `wall_us`.
 
-> **Timing over WiFi.** The app times each sample by when its line arrives. Over
+> **Timing over WiFi, through a virtual COM port (TCP 4001).** Through a COM port the app times each sample by when its line arrives. Over
 > USB, lines arrive about every 7 ms. WiFi delivers them with delays of a few
 > to tens of milliseconds and sometimes several at once. The gyroscope values
 > themselves are unchanged, so head velocity is unaffected. The head angle
