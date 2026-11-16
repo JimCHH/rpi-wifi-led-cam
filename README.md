@@ -583,7 +583,9 @@ USB IMU ──USB──► Pi  imu-bridge ─┬─ WiFi, TCP 4002 (time-stamped
   own header and stores `tcp://<pi>:4002`. That address is then listed first
   under the exam screen's IMU port, and chosen. The app takes the time between
   samples from the Pi's clock, so WiFi delays do not enter the head angle or
-  acceleration.
+  acceleration it calculates. The time columns of the recording and the
+  matching of head impulses to eye movement still use the time each sample
+  arrived.
 - **Older app builds (TCP 4001).** A virtual COM port on the PC receives the
   lines unchanged, and the app reads it as it reads the USB IMU (see *On the
   PC* below, and the timing note at the end of this section).
