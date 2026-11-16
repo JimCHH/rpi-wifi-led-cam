@@ -265,7 +265,6 @@ camera is and which unit this is:
 | `rtsp` | `8554` | Camera RTSP port (`camera/mediamtx.yml`) |
 | `stream` | `cam` | Camera stream name (`camera/mediamtx.yml`) |
 | `hw` | `88:a2:9e:eb:f4:7f` | Hardware address of the WiFi interface |
-| `imu` | `4001` | IMU relay TCP port; present only when the IMU relay is installed (see [§11](#11-usb-imu-over-wifi-for-ns01-2)) |
 
 Check it from a Mac on the same network:
 
@@ -571,8 +570,14 @@ that COM port as it reads the USB IMU. See the timing note at the end of this
 section before clinical use.
 
 ```
-USB IMU ──USB──► Pi  imu-bridge  ──WiFi, TCP 4001──► PC  virtual COMx ──► NS01-2 app
+USB IMU ──USB──► Pi  imu-bridge ─┬─ WiFi, TCP 4001 ──► PC  virtual COMx ──► NS01-2 app
+                                 └─ WiFi, TCP 4002 ──► receivers that need sample times
 ```
+
+The relay is self-contained: its program and tests are in `imu/`, it is
+installed by `setup-imu.sh`, and it does not change the LED server, the camera
+or the DNS-SD announcement. To remove it:
+`sudo systemctl disable --now imu-bridge && sudo rm /etc/systemd/system/imu-bridge.service`.
 
 **On the Pi.** Plug the IMU into the Pi's **USB** port (the inner one). The Zero 2 W
 has one data port, so to use the IMU and the USB camera together, connect both
@@ -626,8 +631,44 @@ sudo systemctl restart imu-bridge
 ```
 
 Other settings, as `Environment=` lines in the same way: `IMU_DEV=/dev/ttyACM0`
-(fixed device instead of detection), `IMU_PORT` (TCP port; re-run
-`./setup-imu.sh` with `IMU_PORT=…` so the DNS-SD record matches), `IMU_BAUD`.
+(fixed device instead of detection), `IMU_PORT`, `IMU_SYNC_PORT` (`0` turns the
+synchronized output off), `IMU_BAUD`.
+
+### Synchronized output (TCP 4002)
+
+Port 4001 carries the IMU lines exactly as the app expects them, with no time
+information: the app times each sample by when it arrives. Port 4002 carries
+the same lines with the time each one was read on the Pi, so a receiver can
+place samples in time regardless of WiFi delays. The first line names the
+format; each line after it is one sample:
+
+```
+# nsn-imu-sync 1 seq,mono_us,wall_us,acc_x_hi,acc_x_lo,…,mag_z_lo
+1042,183920114551,1763284512346781,0,0,8,0,0,0,0,0,6,103,0,0,0,1,0,2,0,3
+```
+
+| Field | Meaning |
+|---|---|
+| `seq` | Counts every line read from the IMU, including lines not forwarded. A gap means lines were skipped or dropped. |
+| `mono_us` | Pi monotonic clock, microseconds. Use it for the time between samples; it never jumps. |
+| `wall_us` | Pi wall clock (Unix time), microseconds. Use it to line samples up with other streams. NTP can step it, so do not use it for intervals. |
+| 18 tokens | The IMU line, unchanged (same scale as port 4001). |
+
+Check it with `nc <pi address> 4002 | head`.
+
+Both time stamps are taken when the Pi reads the bytes from the USB serial
+device. If the USB serial driver hands over several lines in one read, those
+lines share one time stamp. The log reports this once a minute (`time stamps:
+N% shared with the previous line, largest gap … ms`). If the share is high,
+check the IMU's USB serial chip: for an FTDI chip, lower its latency timer
+(`echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer`).
+
+> The wall clock lines samples up with other streams only as well as those
+> streams are stamped. The camera stream (§9) is time-stamped by ffmpeg, and
+> only the hardware-transcode path uses the wall clock
+> (`-use_wallclock_as_timestamps`); whether a receiver can recover the Pi's
+> wall clock from the RTSP stream has not been tested. The NS01-2 app does not
+> read port 4002 yet.
 
 > **Timing over WiFi.** The app times each sample by when its line arrives. Over
 > USB, lines arrive about every 7 ms. WiFi delivers them with delays of a few
@@ -643,7 +684,8 @@ Other settings, as `Environment=` lines in the same way: `IMU_DEV=/dev/ttyACM0`
 > buffer, and the head trace can fall behind during a test. The relay sends
 > each line on its own to keep this low, but cannot prevent it. Both points
 > need an app change to fix fully (read every waiting line, and use a time
-> stamp sent with each sample); they are not part of this relay.
+> stamp sent with each sample, as port 4002 provides); they are not part of
+> this relay.
 
 Useful commands:
 

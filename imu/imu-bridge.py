@@ -14,10 +14,25 @@ Line format (what the app's IMUData parser and IMU.TestPort accept):
 Any other line would become an all-zero sample in the app, so only lines in this
 format are forwarded. Log output goes to stderr (the journal), never to clients.
 
+Synchronized output (IMU_SYNC_PORT, default 4002), for receivers that need to
+know when each sample was taken rather than when it arrived. The first line
+names the format; every line after it is one IMU line with three fields before
+the 18 tokens:
+    # nsn-imu-sync 1 seq,mono_us,wall_us,<18 IMU tokens>
+    seq      counts every line read from the IMU, including lines not forwarded,
+             so a gap in seq means lines were skipped or dropped
+    mono_us  Pi monotonic clock (CLOCK_MONOTONIC), microseconds; use it for the
+             time between samples. It never jumps.
+    wall_us  Pi wall clock (Unix time), microseconds; use it to line samples up
+             with other streams. NTP can step it, so do not use it for dt.
+Both are taken when the Pi reads the bytes from the USB serial device. Lines
+that arrive in one read share one time stamp. Port 4001 is not changed by this.
+
 Environment:
     IMU_DEV      serial device, "auto" (default) or "sim" (synthetic test data)
     IMU_BAUD     115200 (the app's rate)
     IMU_PORT     TCP port to serve on, default 4001
+    IMU_SYNC_PORT  TCP port of the synchronized output, default 4002; 0 turns it off
     IMU_BIND     address to listen on, default 0.0.0.0
     IMU_SIM_HZ   sample rate of the synthetic source, default 145
 """
@@ -35,6 +50,7 @@ import time
 DEV = os.environ.get("IMU_DEV", "auto")
 BAUD = int(os.environ.get("IMU_BAUD", "115200"))
 PORT = int(os.environ.get("IMU_PORT", "4001"))
+SYNC_PORT = int(os.environ.get("IMU_SYNC_PORT", "4002"))
 BIND = os.environ.get("IMU_BIND", "0.0.0.0")
 SIM_HZ = float(os.environ.get("IMU_SIM_HZ", "145"))
 
@@ -51,6 +67,16 @@ BAUD_CONST = {
     9600: termios.B9600, 19200: termios.B19200, 38400: termios.B38400,
     57600: termios.B57600, 115200: termios.B115200, 230400: termios.B230400,
 }
+
+
+_AXES = ["acc_x", "acc_y", "acc_z", "gyr_x", "gyr_y", "gyr_z", "mag_x", "mag_y", "mag_z"]
+SYNC_HEADER = ("# nsn-imu-sync 1 seq,mono_us,wall_us,"
+               + ",".join(f"{a}_{b}" for a in _AXES for b in ("hi", "lo")) + "\r\n").encode()
+
+
+def stamp():
+    """(monotonic us, wall-clock us), read together."""
+    return time.monotonic_ns() // 1000, time.time_ns() // 1000
 
 
 def log(msg):
@@ -87,16 +113,21 @@ def encode(values):
 # --- clients ------------------------------------------------------------------
 
 class Clients:
-    def __init__(self):
+    def __init__(self, name, header=None):
+        self.name = name
+        self._header = header          # sent once to each client on connect
         self._lock = threading.Lock()
         self._queues = {}
 
     def add(self, conn, addr):
         q = queue.Queue(maxsize=CLIENT_QUEUE)
+        if self._header:
+            q.put_nowait(self._header)
         with self._lock:
             self._queues[conn] = q
+            n = len(self._queues)
         threading.Thread(target=self._writer, args=(conn, addr, q), daemon=True).start()
-        log(f"client connected: {addr[0]}:{addr[1]} ({len(self._queues)} total)")
+        log(f"{self.name} client connected: {addr[0]}:{addr[1]} ({n} total)")
 
     def _writer(self, conn, addr, q):
         dropped = 0
@@ -116,7 +147,7 @@ class Clients:
                 conn.close()
             except OSError:
                 pass
-            log(f"client disconnected: {addr[0]}:{addr[1]} ({n} left)")
+            log(f"{self.name} client disconnected: {addr[0]}:{addr[1]} ({n} left)")
 
     def send(self, line):
         with self._lock:
@@ -139,12 +170,28 @@ class Clients:
             return len(self._queues)
 
 
-def serve(clients):
+class Outputs:
+    """The app-compatible output and the synchronized output, fed together."""
+
+    def __init__(self):
+        self.raw = Clients("raw")
+        self.sync = Clients("sync", SYNC_HEADER) if SYNC_PORT else None
+
+    def publish(self, seq, line, mono_us, wall_us):
+        self.raw.send(line + b"\r\n")
+        if self.sync:
+            self.sync.send(b"%d,%d,%d," % (seq, mono_us, wall_us) + line + b"\r\n")
+
+    def count(self):
+        return self.raw.count() + (self.sync.count() if self.sync else 0)
+
+
+def serve(clients, port):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((BIND, PORT))
+    srv.bind((BIND, port))
     srv.listen(4)
-    log(f"serving on tcp {BIND}:{PORT}")
+    log(f"serving {clients.name} lines on tcp {BIND}:{port}")
     while True:
         conn, addr = srv.accept()
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   # no batching delay
@@ -178,10 +225,11 @@ def open_serial(path):
 
 
 def read_lines(fd, timeout=None):
-    """Yield complete lines (bytes, without CR/LF) from fd.
+    """Yield (line, mono_us, wall_us) for each complete line read from fd.
 
-    Stops when `timeout` seconds pass with no data. The first, possibly partial,
-    line is discarded.
+    The line is bytes without CR/LF. The time stamps are taken as soon as the
+    read that completed the line returns. Stops when `timeout` seconds pass with
+    no data. The first, possibly partial, line is discarded.
     """
     buf = b""
     synced = False
@@ -192,6 +240,7 @@ def read_lines(fd, timeout=None):
                 return
             continue
         chunk = os.read(fd, 4096)
+        mono_us, wall_us = stamp()
         if not chunk:
             raise OSError("device closed")
         buf += chunk
@@ -200,7 +249,7 @@ def read_lines(fd, timeout=None):
             if not synced:
                 synced = True
                 continue
-            yield line.rstrip(b"\r")
+            yield line.rstrip(b"\r"), mono_us, wall_us
         if len(buf) > 4096:              # no line ending in a long run: resync
             buf = b""
             synced = False
@@ -224,7 +273,7 @@ def probe(path):
         return False
     try:
         deadline = time.monotonic() + PROBE_SECONDS
-        for line in read_lines(fd, timeout=PROBE_SECONDS):
+        for line, _, _ in read_lines(fd, timeout=PROBE_SECONDS):
             if valid_line(line):
                 return True
             if time.monotonic() > deadline:
@@ -245,8 +294,9 @@ def find_device():
     return None
 
 
-def run_serial(clients):
+def run_serial(out):
     waiting_logged = False
+    seq = 0              # continues across reconnects, so receivers see one count
     while True:
         path = find_device()
         if not path:
@@ -263,34 +313,65 @@ def run_serial(clients):
             time.sleep(RESCAN_SECONDS)
             continue
         log(f"reading IMU on {path} at {BAUD} baud")
-        relay(fd, clients)
+        seq = relay(fd, out, seq)
         os.close(fd)
         log(f"IMU on {path} stopped; scanning again")
 
 
-def relay(fd, clients):
-    good = bad = 0
-    t0 = time.monotonic()
+class Stats:
+    """Once a minute: line rate, skipped lines, and how fine the time stamps are."""
+
+    def __init__(self):
+        self.reset(time.monotonic())
+
+    def reset(self, now):
+        self.t0 = now
+        self.good = self.bad = self.shared = 0
+        self.max_gap_us = 0
+        self.last_us = None
+
+    def line(self, ok, mono_us):
+        if ok:
+            self.good += 1
+        else:
+            self.bad += 1
+        if self.last_us is not None:
+            gap = mono_us - self.last_us
+            if gap == 0:
+                self.shared += 1
+            self.max_gap_us = max(self.max_gap_us, gap)
+        self.last_us = mono_us
+
+    def maybe_log(self, out):
+        now = time.monotonic()
+        if now - self.t0 < 60:
+            return
+        n = self.good + self.bad
+        log(f"{self.good / (now - self.t0):.1f} lines/s, {self.bad} skipped, "
+            f"time stamps: {100 * self.shared / max(n, 1):.0f}% shared with the previous line, "
+            f"largest gap {self.max_gap_us / 1000:.1f} ms, {out.count()} client(s)")
+        self.reset(now)
+
+
+def relay(fd, out, seq=0):
+    stats = Stats()
     try:
-        # A connected IMU sends ~145 lines/s; 3 s of silence means it is gone.
-        for line in read_lines(fd, timeout=3.0):
-            if valid_line(line):
-                clients.send(line + b"\r\n")
-                good += 1
-            else:
-                bad += 1
-            now = time.monotonic()
-            if now - t0 >= 60:
-                log(f"{good / (now - t0):.1f} lines/s, {bad} skipped, {clients.count()} client(s)")
-                good = bad = 0
-                t0 = now
+        # A connected IMU sends a line every few ms; 3 s of silence means it is gone.
+        for line, mono_us, wall_us in read_lines(fd, timeout=3.0):
+            seq += 1
+            ok = valid_line(line)
+            if ok:
+                out.publish(seq, line, mono_us, wall_us)
+            stats.line(ok, mono_us)
+            stats.maybe_log(out)
     except OSError as e:
         log(f"read error: {e}")
+    return seq
 
 
 # --- synthetic source (testing without the IMU) -------------------------------
 
-def run_sim(clients):
+def run_sim(out):
     log(f"SIMULATED IMU at {SIM_HZ:g} Hz (IMU_DEV=sim); not for patient use")
     period = 1.0 / SIM_HZ
     nxt = time.monotonic()
@@ -302,8 +383,8 @@ def run_sim(clients):
         line = encode([0, 0, ACC_LSB_PER_G,
                        0, gyro_y * GYRO_LSB_PER_DPS, 0,
                        0, 0, 0])
-        clients.send(line + b"\r\n")
         n += 1
+        out.publish(n, line, *stamp())
         nxt += period
         delay = nxt - time.monotonic()
         if delay > 0:
@@ -313,12 +394,14 @@ def run_sim(clients):
 
 
 def main():
-    clients = Clients()
-    threading.Thread(target=serve, args=(clients,), daemon=True).start()
+    out = Outputs()
+    threading.Thread(target=serve, args=(out.raw, PORT), daemon=True).start()
+    if out.sync:
+        threading.Thread(target=serve, args=(out.sync, SYNC_PORT), daemon=True).start()
     if DEV == "sim":
-        run_sim(clients)
+        run_sim(out)
     else:
-        run_serial(clients)
+        run_serial(out)
 
 
 if __name__ == "__main__":
