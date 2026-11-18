@@ -265,6 +265,11 @@ camera is and which unit this is:
 | `rtsp` | `8554` | Camera RTSP port (`camera/mediamtx.yml`) |
 | `stream` | `cam` | Camera stream name (`camera/mediamtx.yml`) |
 | `hw` | `88:a2:9e:eb:f4:7f` | Hardware address of the WiFi interface |
+| `imu` | `4002` | IMU port (synchronized output); only when the IMU relay is installed ([§11](#11-usb-imu-over-wifi-for-ns01-2)) |
+
+Other features add keys without editing `setup-mdns.sh`: each `key=value` line in
+`/etc/nsn-cam.d/*.txt` becomes one more TXT record the next time `setup-mdns.sh`
+runs (`install-service.sh` runs it too, so the keys survive).
 
 Check it from a Mac on the same network:
 
@@ -558,6 +563,154 @@ work with no extra hardware.
 - `[Errno 13] Permission denied` → add the service user to the group:
   `sudo usermod -aG i2c $USER` then reboot.
 - Restart after changes: `sudo systemctl restart rpi-wifi-led`.
+
+---
+
+## 11. USB IMU over WiFi (for NS01-2)
+
+The NS01-2 app reads its head-motion sensor (the USB IMU) from a Windows COM
+port. With the IMU plugged into the Pi instead, the Pi sends the sensor's lines
+over WiFi. The app binds the IMU the way it binds the camera and the light:
+
+```
+USB IMU ──USB──► Pi  imu-bridge ─┬─ WiFi, TCP 4002 (time-stamped) ──► NS01-2 app (paired headset)
+                                 └─ WiFi, TCP 4001 (as the USB IMU) ─► PC virtual COMx ──► older app builds
+```
+
+- **NS01-2 app with wireless IMU support (TCP 4002).** The Pi announces the port
+  as `imu=4002` in its `_nsn-cam._tcp` record. When the operator pairs the
+  headset in **Settings**, the app checks that the port answers with the IMU's
+  own header and stores `tcp://<pi>:4002`. That address is then listed first
+  under the exam screen's IMU port, and chosen. The app takes the time between
+  samples from the Pi's clock, so WiFi delays do not enter the head angle or
+  acceleration it calculates. The time columns of the recording and the
+  matching of head impulses to eye movement still use the time each sample
+  arrived.
+- **Older app builds (TCP 4001).** A virtual COM port on the PC receives the
+  lines unchanged, and the app reads it as it reads the USB IMU (see *On the
+  PC* below, and the timing note at the end of this section).
+
+The relay is self-contained: its program and tests are in `imu/` and it is
+installed by `setup-imu.sh`. It does not change the LED server or the camera;
+it adds its announcement key through `/etc/nsn-cam.d/imu.txt`. To remove it:
+`sudo systemctl disable --now imu-bridge && sudo rm /etc/systemd/system/imu-bridge.service /etc/nsn-cam.d/imu.txt && ./setup-mdns.sh`.
+
+**On the Pi.** Plug the IMU into the Pi's **USB** port (the inner one). The Zero 2 W
+has one data port, so to use the IMU and the USB camera together, connect both
+through a small USB hub. USB gadget mode (`setup-usb-gadget.sh`) must be off.
+Then run:
+
+```bash
+cd ~/rpi-wifi-led
+./setup-imu.sh
+```
+
+This installs the **`imu-bridge`** service. It finds the IMU among
+`/dev/serial/by-id/*`, `/dev/ttyACM*` and `/dev/ttyUSB*` by listening for its
+lines, reads it at 115200 baud, and serves the lines on **TCP port 4001**. If the
+IMU is unplugged, the service waits and resumes when it is plugged back in.
+Several PCs may connect at once; each receives every line.
+
+Each line's content is forwarded unchanged: 18 comma-separated numbers (high and low byte
+of the accelerometer, gyroscope and magnetometer axes), sent with a CR LF ending.
+Lines in any other form are not forwarded, because the app would read them as
+all-zero samples.
+
+**On the PC (Windows), only for older app builds.** Install a virtual COM port driver that connects a COM
+port to a TCP address, and point it at `<pi address>:4001` as a **TCP client in
+raw mode** (no Telnet or RFC 2217). Two examples (the Windows side has not
+been tested with the app yet):
+
+- **HW Virtual Serial Port** (HW group, free): *Create COM*, IP = the Pi, Port = 4001.
+- **com0com + com2tcp** (open source): com0com makes a pair of linked ports
+  (`CNCA0` and `CNCB0`); `com2tcp \\.\CNCB0 <pi address> 4001` connects one
+  end to the Pi, and the app uses the other end (`CNCA0`, or the COM name you
+  give it in the com0com setup).
+
+Baud-rate settings on the virtual port have no effect; the app's 115200 is fine.
+In the app, choose the new COM port, or let it detect the IMU automatically.
+
+**Check the stream** before opening the app:
+
+```bash
+nc <pi address> 4001 | head          # from a Mac/Linux PC: 18 numbers per line
+journalctl -u imu-bridge -f          # on the Pi: device found, clients, lines/s
+```
+
+The log prints the line rate once a minute; it matches the rate the IMU sends.
+To test without the IMU, run the relay with synthetic data (it says so in the
+log; never use it with a patient):
+
+```bash
+sudo systemctl edit imu-bridge       # add:  [Service]  Environment=IMU_DEV=sim
+sudo systemctl restart imu-bridge
+```
+
+Other settings, as `Environment=` lines in the same way: `IMU_DEV=/dev/ttyACM0`
+(fixed device instead of detection), `IMU_PORT`, `IMU_SYNC_PORT` (`0` turns the
+synchronized output off), `IMU_BAUD`.
+
+### Synchronized output (TCP 4002)
+
+Port 4001 carries the IMU lines exactly as the app expects them, with no time
+information: the app times each sample by when it arrives. Port 4002 carries
+the same lines with the time each one was read on the Pi, so a receiver can
+place samples in time regardless of WiFi delays. The first line names the
+format; each line after it is one sample:
+
+```
+# nsn-imu-sync 1 seq,mono_us,wall_us,acc_x_hi,acc_x_lo,…,mag_z_lo
+1042,183920114551,1763284512346781,0,0,8,0,0,0,0,0,6,103,0,0,0,1,0,2,0,3
+```
+
+| Field | Meaning |
+|---|---|
+| `seq` | Counts every line read from the IMU, including lines not forwarded. A gap means lines were skipped or dropped. |
+| `mono_us` | Pi monotonic clock, microseconds. Use it for the time between samples; it never jumps. |
+| `wall_us` | Pi wall clock (Unix time), microseconds. Use it to line samples up with other streams. NTP can step it, so do not use it for intervals. |
+| 18 tokens | The IMU line, unchanged (same scale as port 4001). |
+
+Check it with `nc <pi address> 4002 | head`.
+
+Both time stamps are taken when the Pi reads the bytes from the USB serial
+device. If the USB serial driver hands over several lines in one read, those
+lines share one time stamp. The log reports this once a minute (`time stamps:
+N% shared with the previous line, largest gap … ms`). If the share is high,
+check the IMU's USB serial chip: for an FTDI chip, lower its latency timer
+(`echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer`).
+
+> The wall clock lines samples up with other streams only as well as those
+> streams are stamped. The camera stream (§9) is time-stamped by ffmpeg, and
+> only the hardware-transcode path uses the wall clock
+> (`-use_wallclock_as_timestamps`); whether a receiver can recover the Pi's
+> wall clock from the RTSP stream has not been tested. The NS01-2 app uses
+> `seq` and `mono_us` for the intervals between samples; it does not yet line
+> IMU samples up with video frames by `wall_us`.
+
+> **Timing over WiFi, through a virtual COM port (TCP 4001).** Through a COM port the app times each sample by when its line arrives. Over
+> USB, lines arrive about every 7 ms. WiFi delivers them with delays of a few
+> to tens of milliseconds and sometimes several at once. The gyroscope values
+> themselves are unchanged, so head velocity is unaffected. The head angle
+> and head acceleration the app calculates from arrival times are less steady,
+> so the acceleration check during a head impulse (*Too Fast* / *Too Slow*) can
+> misjudge some impulses. Keep the Pi and the PC close to the same access point
+> (or use the Pi's hotspot), and keep WiFi power-save off (`install-service.sh`
+> does this). Compare a WiFi recording with a USB recording before clinical use.
+> The app also reads one line each time the COM port reports new data. When
+> WiFi delivers several lines together, the extra lines wait in the port's
+> buffer, and the head trace can fall behind during a test. The relay sends
+> each line on its own to keep this low, but cannot prevent it. Both points
+> need an app change to fix fully (read every waiting line, and use a time
+> stamp sent with each sample, as port 4002 provides); they are not part of
+> this relay.
+
+Useful commands:
+
+```bash
+systemctl status imu-bridge          # is it running?
+sudo systemctl restart imu-bridge    # after git pull
+sudo systemctl disable --now imu-bridge   # turn it off
+```
 
 ---
 
