@@ -227,9 +227,11 @@ def open_serial(path):
 def read_lines(fd, timeout=None):
     """Yield (line, mono_us, wall_us) for each complete line read from fd.
 
-    The line is bytes without CR/LF. The time stamps are taken as soon as the
-    read that completed the line returns. Stops when `timeout` seconds pass with
-    no data. The first, possibly partial, line is discarded.
+    The line is bytes without CR/LF. The IMU ends a line with CR LF CR, so the
+    CR that opens the next line is removed as well as the one that closes it.
+    The time stamps are taken as soon as the read that completed the line
+    returns. Stops when `timeout` seconds pass with no data. The first, possibly
+    partial, line is discarded.
     """
     buf = b""
     synced = False
@@ -249,7 +251,7 @@ def read_lines(fd, timeout=None):
             if not synced:
                 synced = True
                 continue
-            yield line.rstrip(b"\r"), mono_us, wall_us
+            yield line.strip(b"\r"), mono_us, wall_us
         if len(buf) > 4096:              # no line ending in a long run: resync
             buf = b""
             synced = False

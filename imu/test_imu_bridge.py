@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for imu-bridge.py that need no IMU and no Pi: run  python3 imu/test_imu_bridge.py
-A pseudo-terminal stands in for the USB IMU. Uses local TCP ports 14001-14014."""
+A pseudo-terminal stands in for the USB IMU. Uses local TCP ports 14001-14021."""
 import os, pty, socket, subprocess, sys, time, threading, importlib.util, tty
 B=os.path.join(os.path.dirname(os.path.abspath(__file__)),'imu-bridge.py')
 spec=importlib.util.spec_from_file_location('ib',B); ib=importlib.util.module_from_spec(spec); spec.loader.exec_module(ib)
@@ -44,6 +44,27 @@ for l in lines:
     d=dataconv(tok); assert abs(d[2]-1)<1e-9 and abs(d[4]-100)<0.1 and d[6:]==[1,2,3], d
 print(f'pty relay ok: {len(lines)} lines in 3 s = {len(lines)/3:.0f}/s, garbage filtered')
 stop=True; c.close(); p.terminate(); print(p.communicate()[1])
+
+# 2b. the line ending the real IMU sends: CR LF CR, so every line after the first opens with a CR
+m2,s2=pty.openpty(); tty.setraw(s2); run2=[True]
+def feed_cr(fd=m2, run=run2):
+    while run[0]:
+        os.write(fd, ib.encode([0,0,2048,0,int(100*16.4),0,1,2,3])+b'\r\n\r')
+        time.sleep(1/30)
+threading.Thread(target=feed_cr,daemon=True).start()
+p=subprocess.Popen([sys.executable,'-I',B],env=dict(os.environ,IMU_DEV=os.ttyname(s2),IMU_PORT='14021',IMU_SYNC_PORT='0'),stderr=subprocess.PIPE,text=True)
+time.sleep(1.0)
+c=socket.create_connection(('127.0.0.1',14021)); c.settimeout(0.2); buf=b''; t0=time.time()
+while time.time()-t0<3:
+    try: buf+=c.recv(65536)
+    except socket.timeout: pass
+lines=buf.split(b'\n')[1:-1]
+assert len(lines)>60, f'only {len(lines)} lines relayed in 3 s from an IMU that ends lines with CR LF CR'
+for l in lines:
+    assert l.endswith(b'\r') and not l.startswith(b'\r'), l
+    assert ib.valid_line(l[:-1]), l
+print(f'CR LF CR line ending ok: {len(lines)} lines in 3 s = {len(lines)/3:.0f}/s')
+run2[0]=False; c.close(); p.terminate(); print(p.communicate()[1])
 
 # 3. sim mode rate
 p=subprocess.Popen([sys.executable,'-I',B],env=dict(os.environ,IMU_DEV='sim',IMU_PORT='14002'),stderr=subprocess.PIPE,text=True)
