@@ -20,6 +20,9 @@ for v in [0,1,-1,32767,-32767,-32768,40000,12345,-12345]:
     exp=max(-32767,min(32767,v))
     assert got==exp,(v,got); assert ib.valid_line(ib.encode([v]*9))
 print('encode round trip ok')
+assert ib.frame_line(b'12 418959432132') == (12, 418959432132)
+assert ib.frame_line(b'12') is None and ib.frame_line(b'x 1') is None and ib.frame_line(b'1 2 3') is None
+print('frame line ok')
 assert not ib.valid_line(b'1,2,3'); assert not ib.valid_line(b','.join([b'256']*18)); assert not ib.valid_line(b'')
 
 # 2. fake USB IMU on a pty
