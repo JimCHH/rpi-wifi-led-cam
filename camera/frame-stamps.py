@@ -20,6 +20,7 @@ import sys
 
 PORT = int(os.environ.get("IMU_FRAME_PORT", "4003"))
 LINE = re.compile(rb"Parsed_showinfo.*?\bn:\s*(\d+)\s+pts:\s*-?\d+\s+pts_time:([0-9.]+)")
+LOUD = re.compile(rb"\[(warning|error|fatal|panic)\]")
 
 
 def main():
@@ -29,8 +30,11 @@ def main():
     for raw in sys.stdin.buffer:
         m = LINE.search(raw)
         if m is None:
-            sys.stderr.buffer.write(raw)
-            sys.stderr.buffer.flush()
+            # ffmpeg runs at info level for showinfo; only its warnings and errors go on to the
+            # journal (showinfo's own per-frame detail lines would fill it at 30 lines a second).
+            if LOUD.search(raw):
+                sys.stderr.buffer.write(raw)
+                sys.stderr.buffer.flush()
             continue
         n = int(m.group(1))
         mono_us = int(round(float(m.group(2)) * 1_000_000))
