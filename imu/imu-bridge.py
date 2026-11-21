@@ -28,6 +28,17 @@ the 18 tokens:
 Both are taken when the Pi reads the bytes from the USB serial device. Lines
 that arrive in one read share one time stamp. Port 4001 is not changed by this.
 
+Camera frame times, on the same output: when the camera's capture ffmpeg runs
+with the frame-number strip (camera/camera-publish.sh, camera/frame-stamps.py),
+each frame's capture time arrives here as a UDP datagram "<n> <mono_us>" and is
+passed on as one line:
+    # frame <n> <mono_us>
+    n        the frame number drawn into that frame's picture (24 bits, LSB first,
+             in a 16 px column at the picture's left edge; it restarts at 0 when
+             the camera stream restarts)
+    mono_us  the frame's capture time on the same CLOCK_MONOTONIC as the samples
+A receiver that does not know these lines ignores them (they start with "#").
+
 Environment:
     IMU_DEV      serial device, "auto" (default) or "sim" (synthetic test data)
     IMU_BAUD     115200 (the app's rate)
@@ -35,6 +46,7 @@ Environment:
     IMU_SYNC_PORT  TCP port of the synchronized output, default 4002; 0 turns it off
     IMU_BIND     address to listen on, default 0.0.0.0
     IMU_SIM_HZ   sample rate of the synthetic source, default 145
+    IMU_FRAME_PORT  UDP port (127.0.0.1) for camera frame times, default 4003; 0 turns it off
 """
 import glob
 import math
@@ -51,6 +63,7 @@ DEV = os.environ.get("IMU_DEV", "auto")
 BAUD = int(os.environ.get("IMU_BAUD", "115200"))
 PORT = int(os.environ.get("IMU_PORT", "4001"))
 SYNC_PORT = int(os.environ.get("IMU_SYNC_PORT", "4002"))
+FRAME_PORT = int(os.environ.get("IMU_FRAME_PORT", "4003"))
 BIND = os.environ.get("IMU_BIND", "0.0.0.0")
 SIM_HZ = float(os.environ.get("IMU_SIM_HZ", "145"))
 
@@ -182,8 +195,33 @@ class Outputs:
         if self.sync:
             self.sync.send(b"%d,%d,%d," % (seq, mono_us, wall_us) + line + b"\r\n")
 
+    def frame(self, n, mono_us):
+        """A camera frame's capture time, on the synchronized output only."""
+        if self.sync:
+            self.sync.send(b"# frame %d %d\r\n" % (n, mono_us))
+
     def count(self):
         return self.raw.count() + (self.sync.count() if self.sync else 0)
+
+
+def frame_line(datagram):
+    """(n, mono_us) from a frame-stamps datagram "<n> <mono_us>", or None."""
+    parts = datagram.split()
+    if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def serve_frames(out, port):
+    """Camera frame times from camera/frame-stamps.py, passed on as "# frame" lines."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", port))
+    log(f"camera frame times on udp 127.0.0.1:{port}")
+    while True:
+        data, _ = sock.recvfrom(64)
+        f = frame_line(data)
+        if f is not None:
+            out.frame(*f)
 
 
 def serve(clients, port):
@@ -400,6 +438,8 @@ def main():
     threading.Thread(target=serve, args=(out.raw, PORT), daemon=True).start()
     if out.sync:
         threading.Thread(target=serve, args=(out.sync, SYNC_PORT), daemon=True).start()
+        if FRAME_PORT:
+            threading.Thread(target=serve_frames, args=(out, FRAME_PORT), daemon=True).start()
     if DEV == "sim":
         run_sim(out)
     else:

@@ -123,6 +123,36 @@ else
   VENC=(-c:v libx264 -preset ultrafast -tune zerolatency -b:v "$BITRATE" -pix_fmt yuv420p -g "$FPS")
 fi
 
+# Frame times for the app (CAM_FRAME_STAMP=1, the default; only when this Pi re-encodes, since a copied
+# stream cannot be drawn on): the capture ffmpeg keeps the kernel's CLOCK_MONOTONIC frame times
+# (-copyts), logs each frame's number and time (showinfo, no checksum, to frame-stamps.py, which hands
+# them to imu-bridge) and draws the same number into the frame: a 16 px column at the picture's left
+# edge (keep a receiver's own picture analysis clear of it), a white start block then 24 bits,
+# 12 px each, least significant first, white = 1. Survives H.264 at the stream's bitrate (measured
+# 2026-11-21: 337 of 337 frames decoded, ffmpeg CPU unchanged).
+STAMP_VF=""
+DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ "${CAM_FRAME_STAMP:-1}" = 1 ] && [ "${VENC[1]}" != copy ] && [ "$W" -ge 160 ] && [ "$H" -ge 312 ] \
+   && [ -f "$DIR/frame-stamps.py" ]; then
+  STAMP_VF="showinfo=checksum=0,drawbox=x=0:y=0:w=16:h=312:color=black:t=fill,drawbox=x=0:y=0:w=16:h=12:color=white:t=fill"
+  k=0
+  while [ $k -lt 24 ]; do
+    STAMP_VF="$STAMP_VF,drawbox=x=0:y=$(( 12 + k * 12 )):w=16:h=12:color=white:t=fill:enable='mod(floor(n/pow(2\,$k))\,2)'"
+    k=$((k+1))
+  done
+  STRATEGY="$STRATEGY, frame times"
+fi
+run_capture() {
+  # The capture ffmpeg; with frame times, its stderr goes through frame-stamps.py.
+  if [ -n "$STAMP_VF" ]; then
+    ffmpeg -hide_banner -loglevel level+info -nostdin -copyts "$@" 2> >(python3 "$DIR/frame-stamps.py" >&2)
+  else
+    ffmpeg -hide_banner -loglevel warning -nostdin "$@"
+  fi
+}
+VF=()
+[ -n "$STAMP_VF" ] && VF=(-vf "$STAMP_VF")
+
 echo "camera-publish: STREAMING ${SIZE} @ ${FPS}fps  codec=${CODEC}  ${STRATEGY}  ->  $RTSP"
 
 # Record the chosen mode so the LED dashboard can show the stream's fps/size.
@@ -134,15 +164,15 @@ if [ "${HW_PIPE:-0}" = 1 ]; then
   # the encoder's bad timestamps are dropped). Stage 2: assign fresh monotonic
   # timestamps at $FPS and copy (no re-encode) into RTSP. systemd's cgroup kill
   # stops both; `pipefail` (set above) surfaces either stage's failure.
-  ffmpeg -hide_banner -loglevel warning -nostdin \
+  run_capture \
     -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
-    "${VENC[@]}" -f h264 - \
+    "${VF[@]}" "${VENC[@]}" -f h264 - \
   | ffmpeg -hide_banner -loglevel warning \
     -use_wallclock_as_timestamps 1 -f h264 -i - \
     -c:v copy -f rtsp -rtsp_transport tcp "$RTSP"
 else
-  exec ffmpeg -hide_banner -loglevel warning -nostdin \
+  run_capture \
     -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
-    "${VENC[@]}" \
+    "${VF[@]}" "${VENC[@]}" \
     -f rtsp -rtsp_transport tcp "$RTSP"
 fi
