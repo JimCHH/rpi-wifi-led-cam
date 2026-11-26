@@ -21,6 +21,8 @@
 #   CAM_CODEC=h264|mjpeg|yuyv    default: auto (prefers h264, then mjpeg)
 #   CAM_MODE=transcode|copy      mjpeg only; copy = passthrough (RTSP-only)
 #   CAM_BITRATE=6M               transcode bitrate
+#   CAM_SENSOR_FPS=210           MJPEG transcode only: run the camera at this rate but stream CAM_FPS
+#                                (see "Sensor rate above the stream rate" below). Default: off.
 #   CAM_RTSP=rtsp://localhost:8554/cam
 set -uo pipefail
 
@@ -153,6 +155,47 @@ run_capture() {
 VF=()
 [ -n "$STAMP_VF" ] && VF=(-vf "$STAMP_VF")
 
+# Sensor rate above the stream rate (CAM_SENSOR_FPS, off by default). Some cameras clock other hardware
+# from their sensor's frame rate (a sensor on the same board samples once per exposure), so the stream's
+# rate also sets that hardware's rate. With CAM_SENSOR_FPS the camera runs at that rate and a first
+# ffmpeg keeps one compressed frame in every N (N = sensor rate / stream rate, rounded) BEFORE anything
+# is decoded, so the decode and encode load stays that of the stream rate. MJPEG frames stand alone, so
+# any of them can be left out. The kept frames keep their own capture times (nut carries them to the
+# second ffmpeg), and the frame number counts kept frames only. Needs the MJPEG transcode path and an
+# ffmpeg whose noise bitstream filter has the drop expression (5.1 or later); otherwise it is not used,
+# with one line saying why. Not yet measured on a Pi: check CPU and temperature when turning it on.
+SENSOR_FPS="${CAM_SENSOR_FPS:-}"
+KEEP_EVERY=1
+if [ -n "$SENSOR_FPS" ]; then
+  if [ "$CODEC" != mjpeg ] || [ "$TRANSCODE" != 1 ]; then
+    echo "camera-publish: CAM_SENSOR_FPS not used: it needs the MJPEG transcode path (codec=$CODEC)"
+  elif ! ffmpeg -hide_banner -h bsf=noise 2>/dev/null | grep -q -- '-drop '; then
+    echo "camera-publish: CAM_SENSOR_FPS not used: this ffmpeg's noise filter has no drop expression"
+  else
+    KEEP_EVERY=$(( (SENSOR_FPS + FPS / 2) / FPS ))
+    if [ "$KEEP_EVERY" -lt 2 ]; then
+      echo "camera-publish: CAM_SENSOR_FPS=$SENSOR_FPS is not above the stream's $FPS fps; not used"
+      KEEP_EVERY=1
+    else
+      STRATEGY="$STRATEGY, sensor ${SENSOR_FPS}fps (1 frame in ${KEEP_EVERY} streamed)"
+    fi
+  fi
+fi
+# The capture's input: the camera itself, or (sensor rate above the stream rate) the thinned frames.
+if [ "$KEEP_EVERY" -gt 1 ]; then
+  # The thinned stream still declares the sensor's rate; without this the second ffmpeg would pad it back up
+  # to that rate (measured on a synthetic 210 fps source: 629 frames encoded instead of 90).
+  SRC=(-f nut -i - -fps_mode passthrough)
+  thin_frames() {
+    ffmpeg -hide_banner -loglevel warning -nostdin -copyts \
+      -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$SENSOR_FPS" -i "$DEV" \
+      -c:v copy -bsf:v "noise=drop='mod(n\,$KEEP_EVERY)'" -f nut -
+  }
+else
+  SRC=(-f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV")
+  thin_frames() { :; }
+fi
+
 echo "camera-publish: STREAMING ${SIZE} @ ${FPS}fps  codec=${CODEC}  ${STRATEGY}  ->  $RTSP"
 
 # Record the chosen mode so the LED dashboard can show the stream's fps/size.
@@ -164,15 +207,15 @@ if [ "${HW_PIPE:-0}" = 1 ]; then
   # the encoder's bad timestamps are dropped). Stage 2: assign fresh monotonic
   # timestamps at $FPS and copy (no re-encode) into RTSP. systemd's cgroup kill
   # stops both; `pipefail` (set above) surfaces either stage's failure.
-  run_capture \
-    -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
+  thin_frames | run_capture \
+    "${SRC[@]}" \
     "${VF[@]}" "${VENC[@]}" -f h264 - \
   | ffmpeg -hide_banner -loglevel warning \
     -use_wallclock_as_timestamps 1 -f h264 -i - \
     -c:v copy -f rtsp -rtsp_transport tcp "$RTSP"
 else
-  run_capture \
-    -f v4l2 -input_format "$INPUT_FMT" -video_size "$SIZE" -framerate "$FPS" -i "$DEV" \
+  thin_frames | run_capture \
+    "${SRC[@]}" \
     "${VF[@]}" "${VENC[@]}" \
     -f rtsp -rtsp_transport tcp "$RTSP"
 fi
